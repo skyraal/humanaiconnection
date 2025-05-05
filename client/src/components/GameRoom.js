@@ -106,7 +106,7 @@ function GameRoom({ socket, roomData, setRoomData }) {
   };
   
   if (!room) {
-    return <div className="loading">Loading game room...</div>;
+    return <div className="loading">Waiting for host to start the game....</div>;
   }
   
   return (
