@@ -19,16 +19,83 @@ const io = new Server(server, {
 const rooms = {};
 const cards = [
   "Preparing to have a tough conversation by practicing it first with an AI bot.",
-  "Using a friend's photo to create a deep fake video as a joke.",
-  "Sharing someone's social media post without their permission.",
-  "Creating a group chat to plan a surprise party for a friend.",
-  "Using an app to track your child's location for safety.",
-  "Posting pictures of your children on social media without their consent.",
+  "Checking in with your AI girlfriend/boyfriend throughout the day.",
+  "Generating AI bedtime stories for a younger sibling, using personal information about your family to customize them.",
+  "Creating a holographic version of yourself to attend a far-away family gathering.",
+  "Using a friend’s photo to create a deep fake video as a joke.",
+  "Letting AI auto-reply to your friends’ messages when you’re feeling overwhelmed.",
   "Using video calls to stay connected with long-distance family members.",
   "Checking your partner's phone without their knowledge.",
   "Playing online multiplayer games with friends during a pandemic.",
-  "Using AI to write personalized messages to loved ones."
+  "Using AI to write personalized messages to loved ones.",
+  "Tasking AI with tracking special moments in your friends’ lives and sending personalized messages and gifts", "Engage in AI-simulations that help you see the world/ scenarios from someone else’s perspective", "Participating in a virtual AI-facilitated group therapy session", "Using a tool to ‘optimize’ your social media pictures", "Venting frustrations to an AI bot", "Create a memory bank that you and your friends share and can ‘look into’ for years to come", "Using AI that tracks your emotions and translates them into visual art that others can see (like a public ‘mood ring’)", "Letting an AI summarize your friend’s texts when you don’t feel like reading long messages", "Asking an AI chatbot for advice on dealing with feelings of loneliness", "Asking AI to write a heartfelt speech for a friend’s special occasion", "Talking to an AI preserved version of a beloved deceased relative or ancestor", "Generating an AI-created message to apologize to a friend after a fight", "Using AI to translate a message for someone who speaks another language", "Making AI version of your favorite movie/book/tv character to chat with when you are bored", "Having an AI version of you sign on to class", "Using AI to analyze all of your personal data (emails, texts, search history), to recommend romantic partners", "Using a hidden AI companion in your ear to prompt you with topics, questions, and responses while you’re in conversation with someone", "Using AI to rate your physical appearance and offer tips to improve it"
 ];
+
+// Fisher-Yates shuffle algorithm to randomize card order
+function shuffleCards(array) {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
+// Store game results
+const fs = require('fs');
+const path = require('path');
+
+function saveGameResults(roomId) {
+  if (!rooms[roomId]) return;
+  
+  const room = rooms[roomId];
+  const gameData = {
+    roomId,
+    timestamp: new Date().toISOString(),
+    host: room.players.find(p => p.id === room.host)?.username || "Unknown host",
+    players: room.players.map(p => p.username),
+    cards: [],
+  };
+  
+  // Add card results
+  for (let i = 0; i <= room.currentCardIndex; i++) {
+    if (i < room.shuffledCards.length) {
+      const cardResults = {
+        promptText: room.shuffledCards[i],
+        playerChoices: {}
+      };
+      
+      // Collect player choices for this card
+      room.players.forEach(player => {
+        if (room.cardHistory && room.cardHistory[i] && 
+            room.cardHistory[i][player.id]) {
+          cardResults.playerChoices[player.username] = room.cardHistory[i][player.id];
+        }
+      });
+      
+      gameData.cards.push(cardResults);
+    }
+  }
+  
+  try {
+    // Ensure the results directory exists
+    const resultsDir = path.join(__dirname, 'game_results');
+    if (!fs.existsSync(resultsDir)) {
+      fs.mkdirSync(resultsDir, { recursive: true });
+    }
+    
+    // Write the game results to a JSON file
+    const filename = `game_${roomId}_${Date.now()}.json`;
+    const filePath = path.join(resultsDir, filename);
+    fs.writeFileSync(filePath, JSON.stringify(gameData, null, 2));
+    
+    console.log(`Game results saved to ${filePath}`);
+    return filePath;
+  } catch (error) {
+    console.error('Failed to save game results:', error);
+    return null;
+  }
+}
 
 // Socket connection handler
 io.on('connection', (socket) => {
@@ -44,24 +111,21 @@ io.on('connection', (socket) => {
       currentCardIndex: 0,
       revealChoices: false,
       playerChoices: {},
-      gameStarted: false
+      cardHistory: {}, // Store choices for all cards to save in JSON
+      gameStarted: false,
+      shuffledCards: [] // Will store shuffled cards when game starts
     };
     
     socket.join(roomId);
-    socket.emit('room_created', { roomId, isHost: true, username });
-    socket.emit('update_room', rooms[roomId]);
-    
-    console.log(`Room created: ${roomId} by ${username}`);
-
-    socket.on('get_room_data', (roomId) => {
-      console.log(`Getting room data for: ${roomId}`);
-      if (rooms[roomId]) {
-        socket.emit('update_room', rooms[roomId]);
-      } else {
-        socket.emit('error', { message: 'Room not found' });
-      }
+    // First emit room_created with complete room data
+    socket.emit('room_created', { 
+      roomId, 
+      isHost: true, 
+      username,
+      room: rooms[roomId] // Include the entire room object
     });
     
+    console.log(`Room created: ${roomId} by ${username}`);
   });
 
   // Join an existing room
@@ -94,10 +158,15 @@ io.on('connection', (socket) => {
   // Start the game
   socket.on('start_game', (roomId) => {
     if (rooms[roomId] && rooms[roomId].host === socket.id) {
+      // Shuffle the cards for this game session
+      const shuffledCards = shuffleCards(cards);
+      
       rooms[roomId].gameStarted = true;
       rooms[roomId].currentCardIndex = 0;
       rooms[roomId].revealChoices = false;
       rooms[roomId].playerChoices = {};
+      rooms[roomId].shuffledCards = shuffledCards;
+      rooms[roomId].cardHistory = {}; // Reset card history
       
       // Reset player choices for the new card
       rooms[roomId].players.forEach(player => {
@@ -105,11 +174,11 @@ io.on('connection', (socket) => {
       });
       
       io.to(roomId).emit('game_started', { 
-        card: cards[0],
+        card: shuffledCards[0],
         currentCardIndex: 0
       });
       
-      console.log(`Game started in room: ${roomId}`);
+      console.log(`Game started in room: ${roomId} with shuffled cards`);
     }
   });
 
@@ -140,9 +209,23 @@ io.on('connection', (socket) => {
   // Move to next card
   socket.on('next_card', (roomId) => {
     if (rooms[roomId] && rooms[roomId].host === socket.id) {
-      const nextIndex = rooms[roomId].currentCardIndex + 1;
+      const currentIndex = rooms[roomId].currentCardIndex;
       
-      if (nextIndex < cards.length) {
+      // Save current card choices to history before moving to next card
+      if (!rooms[roomId].cardHistory[currentIndex]) {
+        rooms[roomId].cardHistory[currentIndex] = {};
+      }
+      
+      // Copy current choices to history
+      Object.keys(rooms[roomId].playerChoices).forEach(playerId => {
+        if (rooms[roomId].playerChoices[playerId]) {
+          rooms[roomId].cardHistory[currentIndex][playerId] = rooms[roomId].playerChoices[playerId];
+        }
+      });
+      
+      const nextIndex = currentIndex + 1;
+      
+      if (nextIndex < rooms[roomId].shuffledCards.length) {
         rooms[roomId].currentCardIndex = nextIndex;
         rooms[roomId].revealChoices = false;
         
@@ -153,13 +236,16 @@ io.on('connection', (socket) => {
         });
         
         io.to(roomId).emit('new_card', { 
-          card: cards[nextIndex], 
+          card: rooms[roomId].shuffledCards[nextIndex], 
           currentCardIndex: nextIndex 
         });
         
         console.log(`Moved to card ${nextIndex} in room: ${roomId}`);
       } else {
-        io.to(roomId).emit('game_over');
+        // Game is over, save results to JSON
+        const resultsPath = saveGameResults(roomId);
+        
+        io.to(roomId).emit('game_over', { resultsPath });
         console.log(`Game over in room: ${roomId}`);
       }
     }
