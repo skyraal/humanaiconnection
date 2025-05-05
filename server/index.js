@@ -11,7 +11,7 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
-      ? ['https://rithm-game-frontend.onrender.com'] 
+      ? ['https://humanaiconnectiongame.onrender.com'] 
       : '*',
     methods: ['GET', 'POST']
   }
