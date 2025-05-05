@@ -10,7 +10,9 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: process.env.NODE_ENV === 'production' 
+      ? ['https://rithm-game-frontend.onrender.com'] 
+      : '*',
     methods: ['GET', 'POST']
   }
 });
@@ -45,8 +47,13 @@ function shuffleCards(array) {
 const fs = require('fs');
 const path = require('path');
 
-function saveGameResults(roomId) {
-  if (!rooms[roomId]) return;
+function saveGameResults(roomId, isFinal = false) {
+  console.log(`Saving results for room: ${roomId}, isFinal: ${isFinal}`);
+  
+  if (!rooms[roomId]) {
+    console.log(`Room ${roomId} not found. Cannot save results.`);
+    return;
+  }
   
   const room = rooms[roomId];
   const gameData = {
@@ -54,10 +61,12 @@ function saveGameResults(roomId) {
     timestamp: new Date().toISOString(),
     host: room.players.find(p => p.id === room.host)?.username || "Unknown host",
     players: room.players.map(p => p.username),
+    currentCardIndex: room.currentCardIndex,
+    isGameComplete: isFinal,
     cards: [],
   };
   
-  // Add card results
+  // Add card results for all cards that have been shown
   for (let i = 0; i <= room.currentCardIndex; i++) {
     if (i < room.shuffledCards.length) {
       const cardResults = {
@@ -67,9 +76,18 @@ function saveGameResults(roomId) {
       
       // Collect player choices for this card
       room.players.forEach(player => {
+        // Get choice from card history if available, otherwise from current choices
+        let playerChoice = null;
+        
         if (room.cardHistory && room.cardHistory[i] && 
             room.cardHistory[i][player.id]) {
-          cardResults.playerChoices[player.username] = room.cardHistory[i][player.id];
+          playerChoice = room.cardHistory[i][player.id];
+        } else if (i === room.currentCardIndex && room.playerChoices[player.id]) {
+          playerChoice = room.playerChoices[player.id];
+        }
+        
+        if (playerChoice) {
+          cardResults.playerChoices[player.username] = playerChoice;
         }
       });
       
@@ -82,11 +100,14 @@ function saveGameResults(roomId) {
     const resultsDir = path.join(__dirname, 'game_results');
     if (!fs.existsSync(resultsDir)) {
       fs.mkdirSync(resultsDir, { recursive: true });
+      console.log(`Created results directory: ${resultsDir}`);
     }
     
     // Write the game results to a JSON file
-    const filename = `game_${roomId}_${Date.now()}.json`;
+    const timestamp = Date.now();
+    const filename = `game_${roomId}_${timestamp}${isFinal ? '_final' : ''}.json`;
     const filePath = path.join(resultsDir, filename);
+    
     fs.writeFileSync(filePath, JSON.stringify(gameData, null, 2));
     
     console.log(`Game results saved to ${filePath}`);
@@ -223,6 +244,10 @@ io.on('connection', (socket) => {
         }
       });
       
+      // Save the current state after each card
+      const resultsPath = saveGameResults(roomId, false);
+      console.log(`Saved progress after card ${currentIndex}`);
+      
       const nextIndex = currentIndex + 1;
       
       if (nextIndex < rooms[roomId].shuffledCards.length) {
@@ -242,10 +267,13 @@ io.on('connection', (socket) => {
         
         console.log(`Moved to card ${nextIndex} in room: ${roomId}`);
       } else {
-        // Game is over, save results to JSON
-        const resultsPath = saveGameResults(roomId);
+        // Game is over, save final results to JSON with 'final' flag
+        const finalResultsPath = saveGameResults(roomId, true);
         
-        io.to(roomId).emit('game_over', { resultsPath });
+        io.to(roomId).emit('game_over', { 
+          resultsPath: finalResultsPath,
+          downloadUrl: `/download/${roomId}/${path.basename(finalResultsPath)}`
+        });
         console.log(`Game over in room: ${roomId}`);
       }
     }
@@ -302,6 +330,159 @@ io.on('connection', (socket) => {
 function generateRoomId() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
+
+app.get('/admin', (req, res) => {
+  const adminHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Rithm Project Admin</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { color: #333; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        tr:hover { background-color: #f5f5f5; }
+        .button { 
+          display: inline-block; 
+          padding: 5px 10px; 
+          background: #4CAF50; 
+          color: white; 
+          text-decoration: none; 
+          margin-right: 5px;
+          border-radius: 3px;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>Rithm Project - Game Results</h1>
+      <table id="resultsTable">
+        <tr>
+          <th>Filename</th>
+          <th>Room ID</th>
+          <th>Date</th>
+          <th>Host</th>
+          <th>Players</th>
+          <th>Actions</th>
+        </tr>
+        <tbody id="tableBody"></tbody>
+      </table>
+
+      <script>
+        fetch('/admin/results')
+          .then(response => response.json())
+          .then(data => {
+            const tableBody = document.getElementById('tableBody');
+            
+            data.forEach(game => {
+              const row = document.createElement('tr');
+              
+              row.innerHTML = \`
+                <td>\${game.filename}</td>
+                <td>\${game.data.roomId || 'N/A'}</td>
+                <td>\${new Date(game.data.timestamp).toLocaleString()}</td>
+                <td>\${game.data.host || 'Unknown'}</td>
+                <td>\${game.data.players.join(', ')}</td>
+                <td>
+                  <a href="/admin/view/\${game.filename}" class="button" target="_blank">View</a>
+                  <a href="/admin/download/\${game.filename}" class="button" download>Download</a>
+                </td>
+              \`;
+              
+              tableBody.appendChild(row);
+            });
+          })
+          .catch(error => {
+            console.error('Error fetching results:', error);
+          });
+      </script>
+    </body>
+    </html>
+  `;
+  
+  res.send(adminHtml);
+});
+
+const gameResultsDir = path.join(__dirname, 'game_results');
+if (!fs.existsSync(gameResultsDir)) {
+  try {
+    fs.mkdirSync(gameResultsDir, { recursive: true });
+    console.log(`Created game results directory at: ${gameResultsDir}`);
+  } catch (error) {
+    console.error(`Failed to create game results directory: ${error.message}`);
+  }
+}
+
+// API endpoint to get all game results
+app.get('/test-file', (req, res) => {
+  try {
+    const testDir = path.join(__dirname, 'game_results');
+    
+    if (!fs.existsSync(testDir)) {
+      fs.mkdirSync(testDir, { recursive: true });
+    }
+    
+    const testFile = path.join(testDir, 'test_file.json');
+    fs.writeFileSync(testFile, JSON.stringify({ test: 'successful', timestamp: new Date() }, null, 2));
+    
+    res.send(`Test file created at: ${testFile}`);
+  } catch (error) {
+    res.status(500).send(`Error creating test file: ${error.message}`);
+  }
+});
+
+app.get('/list-files', (req, res) => {
+  try {
+    const files = fs.readdirSync(__dirname);
+    const gameResultsPath = path.join(__dirname, 'game_results');
+    let gameResultsFiles = [];
+    
+    if (fs.existsSync(gameResultsPath)) {
+      gameResultsFiles = fs.readdirSync(gameResultsPath);
+    }
+    
+    res.json({ 
+      currentDirectory: __dirname,
+      files,
+      gameResultsDirectory: gameResultsPath,
+      hasGameResultsDir: fs.existsSync(gameResultsPath),
+      gameResultsFiles
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add a simple admin endpoint to view saved games
+app.get('/saved-games', (req, res) => {
+  try {
+    const resultsDir = path.join(__dirname, 'game_results');
+    
+    if (!fs.existsSync(resultsDir)) {
+      return res.json({ message: 'No game results directory found', files: [] });
+    }
+    
+    const files = fs.readdirSync(resultsDir)
+      .filter(file => file.endsWith('.json'))
+      .map(file => {
+        const stats = fs.statSync(path.join(resultsDir, file));
+        return {
+          filename: file,
+          size: stats.size,
+          created: stats.birthtime
+        };
+      })
+      .sort((a, b) => b.created - a.created);
+    
+    res.json({
+      message: `Found ${files.length} game result files`,
+      directory: resultsDir,
+      files
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
