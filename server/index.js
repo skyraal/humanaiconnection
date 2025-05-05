@@ -291,6 +291,16 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('get_room_data', (roomId) => {
+    console.log(`Room data requested for: ${roomId}`);
+    if (rooms[roomId]) {
+      socket.emit('update_room', rooms[roomId]);
+    } else {
+      socket.emit('error', { message: 'Room not found' });
+      console.log(`Room ${roomId} not found when requested`);
+    }
+  });
+
   // Handle disconnection
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
