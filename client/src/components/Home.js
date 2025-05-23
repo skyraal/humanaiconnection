@@ -53,11 +53,12 @@ function Home({ socket, setRoomData }) {
 
   return (
     <div className="home-container">
-      <div className="home-content">
-        <div className="rithm-logo">The Rithm Project</div>
+       <div className="rithm-logo"><img src='logo.png' id='rithm-logo'></img></div>
         
+      <div className="home-content">
+       
         <h1 className="rithm-gradient-text">Building human connection</h1>
-        <h2>in an age of AI</h2>
+        <h2>in the age of AI</h2>
         
         <div className="form-group">
           <label htmlFor="username">Your Name:</label>
