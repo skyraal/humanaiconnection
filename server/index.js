@@ -205,11 +205,9 @@ io.on('connection', (socket) => {
         roomId = generateRoomId();
       }
       
-      const playerId = uuidv4(); // Generate unique player ID for reconnection
-      
       const room = {
         host: socket.id,
-        players: [{id: socket.id, playerId: playerId, username: username.trim(), ready: false}],
+        players: [{id: socket.id, username: username.trim(), ready: false}],
         currentCardIndex: 0,
         revealChoices: false,
         playerChoices: {},
@@ -228,7 +226,6 @@ io.on('connection', (socket) => {
         roomId, 
         isHost: true, 
         username: username.trim(),
-        playerId: playerId,
         room: room
       });
       
@@ -272,8 +269,7 @@ io.on('connection', (socket) => {
       socketToRoom.set(socket.id, roomId);
       
       // Add player to the room
-      const playerId = uuidv4(); // Generate unique player ID for reconnection
-      const newPlayer = {id: socket.id, playerId: playerId, username: username.trim(), ready: false};
+      const newPlayer = {id: socket.id, username: username.trim(), ready: false};
       room.players.push(newPlayer);
       room.playerChoices[socket.id] = null;
       room.lastActivity = Date.now();
@@ -286,7 +282,6 @@ io.on('connection', (socket) => {
           roomId, 
           isHost: false, 
           username: username.trim(),
-          playerId: playerId,
           currentCardIndex: room.currentCardIndex,
           revealChoices: room.revealChoices,
           gameStarted: true,
@@ -310,7 +305,6 @@ io.on('connection', (socket) => {
           roomId, 
           isHost: false, 
           username: username.trim(),
-          playerId: playerId,
           currentCardIndex: room.currentCardIndex,
           revealChoices: room.revealChoices,
           isLateJoiner: false
@@ -560,76 +554,17 @@ io.on('connection', (socket) => {
       console.log(`Room data requested for: ${roomId}`);
       const room = rooms.get(roomId);
       if (room) {
-        // Check if this socket is already in the room
-        const existingPlayer = room.players.find(p => p.id === socket.id);
-        if (existingPlayer) {
-          // Player is already in the room, just send current data
-          socket.emit('update_room', room);
-          
-          // If game is started, also send current card
-          if (room.gameStarted) {
-            const currentCard = getCurrentCard(room);
-            socket.emit('game_state_sync', {
-              gameStarted: true,
-              currentCard: currentCard,
-              currentCardIndex: room.currentCardIndex,
-              revealChoices: room.revealChoices
-            });
-          }
-        } else {
-          // Check if there's a disconnected player that could be reconnecting
-          const disconnectedPlayer = room.players.find(p => p.disconnected);
-          if (disconnectedPlayer) {
-            // This might be a reconnection - update the player's socket ID
-            disconnectedPlayer.id = socket.id;
-            disconnectedPlayer.disconnected = false;
-            delete disconnectedPlayer.disconnectedAt;
-            
-            // Join the room
-            socket.join(roomId);
-            socketToRoom.set(socket.id, roomId);
-            
-            console.log(`Player ${disconnectedPlayer.username} reconnected to room ${roomId}`);
-            
-            // Send reconnection success
-            socket.emit('reconnection_success', {
-              roomId,
-              isHost: room.host === socket.id,
-              username: disconnectedPlayer.username,
-              playerId: disconnectedPlayer.playerId,
-              room: room
-            });
-            
-            // If game is started, also send current card
-            if (room.gameStarted) {
-              const currentCard = getCurrentCard(room);
-              socket.emit('game_state_sync', {
-                gameStarted: true,
-                currentCard: currentCard,
-                currentCardIndex: room.currentCardIndex,
-                revealChoices: room.revealChoices,
-                isReconnection: true
-              });
-            }
-            
-            // Update all players in the room
-            broadcastRoomUpdate(roomId, room);
-            io.to(roomId).emit('player_reconnected', { username: disconnectedPlayer.username });
-          } else {
-            // Normal room data request
-            socket.emit('update_room', room);
-            
-            // If game is started, also send current card
-            if (room.gameStarted) {
-              const currentCard = getCurrentCard(room);
-              socket.emit('game_state_sync', {
-                gameStarted: true,
-                currentCard: currentCard,
-                currentCardIndex: room.currentCardIndex,
-                revealChoices: room.revealChoices
-              });
-            }
-          }
+        socket.emit('update_room', room);
+        
+        // If game is started, also send current card
+        if (room.gameStarted) {
+          const currentCard = getCurrentCard(room);
+          socket.emit('game_state_sync', {
+            gameStarted: true,
+            currentCard: currentCard,
+            currentCardIndex: room.currentCardIndex,
+            revealChoices: room.revealChoices
+          });
         }
       } else {
         socket.emit('error', { message: 'Room not found' });
@@ -641,40 +576,19 @@ io.on('connection', (socket) => {
     }
   });
 
-
-
   // Handle disconnection with improved cleanup
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
     
     const roomId = socketToRoom.get(socket.id);
     if (roomId) {
-      const room = rooms.get(roomId);
-      if (room) {
-        // Don't immediately remove the player - give them time to reconnect
-        // Just mark them as disconnected
-        const player = room.players.find(p => p.id === socket.id);
-        if (player) {
-          player.disconnected = true;
-          player.disconnectedAt = Date.now();
-          console.log(`Player ${player.username} disconnected from room ${roomId}`);
+      const player = removePlayerFromRoom(socket.id, roomId);
+      if (player) {
+        const room = rooms.get(roomId);
+        if (room) {
+          io.to(roomId).emit('player_left', { username: player.username });
+          broadcastRoomUpdate(roomId, room);
         }
-        
-        // Only remove player after a longer timeout (5 minutes for reconnection)
-        setTimeout(() => {
-          const currentRoom = rooms.get(roomId);
-          if (currentRoom) {
-            const currentPlayer = currentRoom.players.find(p => p.id === socket.id);
-            if (currentPlayer && currentPlayer.disconnected) {
-              console.log(`Removing disconnected player ${currentPlayer.username} after timeout`);
-              const removedPlayer = removePlayerFromRoom(socket.id, roomId);
-              if (removedPlayer) {
-                io.to(roomId).emit('player_left', { username: removedPlayer.username });
-                broadcastRoomUpdate(roomId, currentRoom);
-              }
-            }
-          }
-        }, 15 * 60 * 1000); // 15 minutes
       }
     }
   });

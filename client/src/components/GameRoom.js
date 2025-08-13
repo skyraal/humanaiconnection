@@ -127,16 +127,6 @@ function GameRoom({ socket, roomData, setRoomData }) {
       }
     };
 
-    const handleReconnectionSuccess = (data) => {
-      console.log('Reconnection successful:', data);
-      setRoom(data.room);
-      setRoomData({
-        ...roomData,
-        isHost: data.isHost
-      });
-      setIsLoading(false);
-    };
-
     // Add event listeners
     socket.on('update_room', handleRoomUpdate);
     socket.on('game_started', handleGameStarted);
@@ -149,7 +139,6 @@ function GameRoom({ socket, roomData, setRoomData }) {
     socket.on('choice_updated', handleChoiceUpdated);
     socket.on('error', handleError);
     socket.on('room_joined', handleRoomJoined);
-    socket.on('reconnection_success', handleReconnectionSuccess);
     
     // Cleanup function
     return () => {
@@ -164,7 +153,6 @@ function GameRoom({ socket, roomData, setRoomData }) {
       socket.off('choice_updated', handleChoiceUpdated);
       socket.off('error', handleError);
       socket.off('room_joined', handleRoomJoined);
-      socket.off('reconnection_success', handleReconnectionSuccess);
     };
   }, [socket, roomData, setRoomData, roomId]);
   
@@ -277,8 +265,6 @@ function GameRoom({ socket, roomData, setRoomData }) {
             <p>Welcome! You've joined a game in progress. You can participate in the current card discussion.</p>
           </div>
         )}
-        
-
         
         <div className="sidebar">
           <PlayerList 

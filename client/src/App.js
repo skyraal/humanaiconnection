@@ -25,7 +25,6 @@ function App() {
   const [isConnected, setIsConnected] = useState(false); 
   const [roomData, setRoomData] = useState(null);
   const [connectionError, setConnectionError] = useState(null);
-  const [playerId, setPlayerId] = useState(null);
   
   useEffect(() => {
     const handleConnect = () => {
