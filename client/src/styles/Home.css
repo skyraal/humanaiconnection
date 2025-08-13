@@ -33,14 +33,10 @@
 .rithm-logo {
   position: absolute;
   top: 30px;
-  left: 50px;
+  left: 30px;
   font-weight: 700;
   font-size: 18px;
   letter-spacing: 0.5px;
-}
-
-#rithm-logo {
-  max-width: 100px;
 }
 
 .home-content h1 {
