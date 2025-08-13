@@ -113,17 +113,14 @@ function Home({ socket, setRoomData }) {
           
           <div className="mode-selection">
             <div className="mode-card" onClick={() => setMode('create')}>
-              <div className="mode-icon">🎮</div>
-              <h3>Start a New Game</h3>
-              <p>Create a room and invite friends to join</p>
-              <button className="mode-btn create-mode">Start Game</button>
+              <h3>Create a New Game (Host)</h3>
+              <button className="mode-btn create-mode">Create Room</button>
             </div>
             
             <div className="mode-card" onClick={() => setMode('join')}>
-              <div className="mode-icon">🎯</div>
-              <h3>Join a Game</h3>
+              <h3>Join an Existing Game</h3>
               <p>Enter a room code to join an existing game</p>
-              <button className="mode-btn join-mode">Join Game</button>
+              <button className="mode-btn join-mode">Join Room</button>
             </div>
           </div>
         </div>

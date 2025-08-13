@@ -1,71 +1,57 @@
 .home-container {
-  min-height: 100vh;
   display: flex;
-  flex-direction: column;
-  align-items: center;
   justify-content: center;
+  align-items: center;
+  min-height: 100vh;
   padding: 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background-color: #fff;
 }
 
-/* Logo styling - responsive */
+.home-content {
+  background-color: white;
+  padding: 50px;
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+  width: 100%;
+  max-width: 700px;
+  position: relative;
+}
+
+.home-content::before {
+  content: "";
+  position: absolute;
+  top: -80px;
+  left: -80px;
+  width: 250px;
+  height: 250px;
+  background: linear-gradient(135deg, #ff6b8b 0%, #ffa26b 100%);
+  border-radius: 50%;
+  z-index: -1;
+  opacity: 0.8;
+}
+
 .rithm-logo {
   position: absolute;
-  top: 20px;
-  left: 20px;
-  z-index: 10;
+  top: 30px;
+  left: 50px;
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0.5px;
 }
 
 #rithm-logo {
-  height: 50px;
-  width: auto;
-  max-width: 200px;
-  object-fit: contain;
-}
-
-/* Mobile logo adjustments */
-@media (max-width: 768px) {
-  .rithm-logo {
-    position: static;
-    margin-bottom: 20px;
-  }
-  
-  #rithm-logo {
-    height: 40px;
-    max-width: 150px;
-  }
-}
-
-@media (max-width: 480px) {
-  #rithm-logo {
-    height: 35px;
-    max-width: 120px;
-  }
-}
-
-/* Main content */
-.home-content {
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(10px);
-  border-radius: 20px;
-  padding: 40px;
-  max-width: 500px;
-  width: 100%;
-  text-align: center;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  position: relative;
+  max-width: 120px;
+  height: auto;
 }
 
 /* Back button */
 .back-btn {
   position: absolute;
   top: 15px;
-  left: 15px;
-  background: rgba(255, 255, 255, 0.2);
-  border: none;
-  color: white;
+  right: 15px;
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  color: #333;
   padding: 8px 12px;
   border-radius: 20px;
   cursor: pointer;
@@ -74,47 +60,41 @@
 }
 
 .back-btn:hover {
-  background: rgba(255, 255, 255, 0.3);
-  transform: translateX(-2px);
+  background: #e9e9e9;
+  transform: translateX(2px);
 }
 
 /* Headings */
-.rithm-gradient-text {
-  background: linear-gradient(135deg, #ff6b6b, #feca57, #48dbfb, #ff9ff3);
-  background-size: 300% 300%;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  animation: gradientShift 3s ease-in-out infinite;
-  font-size: 2.5rem;
-  font-weight: bold;
+.home-content h1, .rithm-gradient-text {
+  font-size: 36px;
   margin-bottom: 10px;
-  line-height: 1.2;
+  font-weight: 700;
+  color: #333;
 }
 
-@keyframes gradientShift {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-}
-
-h2 {
-  font-size: 1.5rem;
+.home-content h2 {
+  font-size: 20px;
   margin-bottom: 40px;
-  opacity: 0.9;
-  font-weight: 300;
+  font-weight: 400;
+  color: #666;
+  max-width: 80%;
 }
 
 .mode-title {
-  font-size: 2rem;
+  font-size: 36px;
   margin-bottom: 10px;
   margin-top: 20px;
+  font-weight: 700;
+  color: #333;
 }
 
 .mode-description {
-  font-size: 1.1rem;
-  opacity: 0.8;
-  margin-bottom: 30px;
+  font-size: 20px;
+  color: #666;
+  margin-bottom: 40px;
   line-height: 1.4;
+  font-weight: 400;
+  max-width: 80%;
 }
 
 /* Mode selection cards */
@@ -126,52 +106,48 @@ h2 {
 }
 
 .mode-card {
-  background: rgba(255, 255, 255, 0.1);
+  background: #f9f9f9;
   border-radius: 15px;
   padding: 30px 20px;
   cursor: pointer;
   transition: all 0.3s ease;
-  border: 2px solid rgba(255, 255, 255, 0.2);
+  border: 2px solid #e0e0e0;
   position: relative;
-  overflow: hidden;
+  text-align: center;
 }
 
 .mode-card:hover {
-  transform: translateY(-5px);
-  background: rgba(255, 255, 255, 0.15);
-  border-color: rgba(255, 255, 255, 0.4);
-  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.2);
+  transform: translateY(-3px);
+  background: #f5f5f5;
+  border-color: #ccc;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
 }
 
 .mode-card:active {
-  transform: translateY(-2px);
-}
-
-.mode-icon {
-  font-size: 3rem;
-  margin-bottom: 15px;
+  transform: translateY(-1px);
 }
 
 .mode-card h3 {
-  font-size: 1.5rem;
+  font-size: 24px;
   margin-bottom: 10px;
   font-weight: 600;
+  color: #333;
 }
 
 .mode-card p {
-  font-size: 1rem;
-  opacity: 0.8;
+  font-size: 16px;
+  color: #666;
   margin-bottom: 20px;
   line-height: 1.4;
 }
 
 .mode-btn {
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  background: linear-gradient(135deg, #47b884 0%, #4ca2cd 100%);
   border: none;
   color: white;
-  padding: 12px 30px;
-  border-radius: 25px;
-  font-size: 1rem;
+  padding: 14px 30px;
+  border-radius: 8px;
+  font-size: 16px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.3s ease;
@@ -180,16 +156,24 @@ h2 {
 }
 
 .mode-btn:hover {
-  transform: scale(1.05);
-  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(71, 184, 132, 0.3);
 }
 
 .create-mode {
-  background: linear-gradient(135deg, #ff6b6b, #ee5a52);
+  background: linear-gradient(135deg, #ff6b8b 0%, #ffa26b 100%);
+}
+
+.create-mode:hover {
+  box-shadow: 0 8px 25px rgba(255, 107, 139, 0.3);
 }
 
 .join-mode {
-  background: linear-gradient(135deg, #4ecdc4, #44a08d);
+  background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%);
+}
+
+.join-mode:hover {
+  box-shadow: 0 8px 25px rgba(78, 205, 196, 0.3);
 }
 
 /* Form sections */
@@ -198,76 +182,87 @@ h2 {
 }
 
 .form-group {
-  margin-bottom: 25px;
-  text-align: left;
+  margin-bottom: 24px;
 }
 
 .form-group label {
   display: block;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   font-weight: 600;
-  font-size: 1rem;
+  color: #333;
+  font-size: 15px;
 }
 
 .form-group input {
   width: 100%;
-  padding: 15px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.1);
-  color: white;
-  font-size: 1rem;
+  padding: 12px 16px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 16px;
   transition: all 0.3s ease;
   box-sizing: border-box;
 }
 
 .form-group input::placeholder {
-  color: rgba(255, 255, 255, 0.6);
+  color: #999;
 }
 
 .form-group input:focus {
   outline: none;
-  border-color: rgba(255, 255, 255, 0.6);
-  background: rgba(255, 255, 255, 0.15);
-  transform: scale(1.02);
+  border-color: #ff6b8b;
+  box-shadow: 0 0 0 3px rgba(255, 107, 139, 0.1);
+}
+
+.form-group input:disabled {
+  background-color: #f5f5f5;
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .room-code-input {
   text-align: center;
-  font-size: 1.5rem !important;
+  font-size: 24px !important;
   font-weight: 600;
-  letter-spacing: 3px;
+  letter-spacing: 4px;
   text-transform: uppercase;
+  color: #333 !important;
 }
 
 /* Action buttons */
 .action-btn {
-  width: 100%;
-  padding: 15px;
+  background: linear-gradient(135deg, #47b884 0%, #4ca2cd 100%);
+  color: white;
+  padding: 14px;
+  font-size: 16px;
   border: none;
-  border-radius: 10px;
-  font-size: 1.1rem;
-  font-weight: 600;
+  border-radius: 8px;
   cursor: pointer;
+  font-weight: 600;
   transition: all 0.3s ease;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
   margin-top: 10px;
 }
 
 .create-btn {
-  background: linear-gradient(135deg, #ff6b6b, #ee5a52);
+  background: linear-gradient(135deg, #ff6b8b 0%, #ffa26b 100%);
   color: white;
+}
+
+.create-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(255, 107, 139, 0.3);
 }
 
 .join-btn {
-  background: linear-gradient(135deg, #4ecdc4, #44a08d);
+  background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%);
   color: white;
 }
 
-.action-btn:hover:not(:disabled) {
+.join-btn:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 8px 25px rgba(78, 205, 196, 0.3);
 }
 
 .action-btn:active:not(:disabled) {
@@ -275,73 +270,112 @@ h2 {
 }
 
 .action-btn:disabled {
-  opacity: 0.6;
+  background: #ccc;
   cursor: not-allowed;
   transform: none;
+  box-shadow: none;
 }
 
 /* Error messages */
 .error-message {
-  background: rgba(255, 0, 0, 0.1);
-  border: 1px solid rgba(255, 0, 0, 0.3);
-  color: #ff6b6b;
-  padding: 12px;
+  color: #d32f2f;
+  background-color: #ffebee;
+  padding: 12px 16px;
   border-radius: 8px;
-  margin-top: 20px;
-  font-weight: 500;
+  border: 1px solid #ffcdd2;
+  margin-top: 16px;
+  font-size: 14px;
+  text-align: center;
 }
 
-/* Mobile responsiveness */
+/* Loading animation for buttons */
+.create-btn:disabled::after, .join-btn:disabled::after, .action-btn:disabled::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border: 2px solid transparent;
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Responsive Design */
 @media (max-width: 768px) {
-  .home-container {
-    padding: 15px;
-  }
-  
   .home-content {
-    padding: 30px 25px;
-    margin-top: 20px;
+    padding: 30px 20px;
+    margin: 10px;
   }
   
-  .rithm-gradient-text {
-    font-size: 2rem;
+  .home-content h1, .rithm-gradient-text {
+    font-size: 28px;
   }
   
-  h2 {
-    font-size: 1.2rem;
+  .home-content h2 {
+    font-size: 18px;
   }
   
   .mode-title {
-    font-size: 1.7rem;
+    font-size: 28px;
   }
   
   .mode-description {
-    font-size: 1rem;
+    font-size: 18px;
+  }
+  
+  .rithm-logo {
+    position: relative;
+    top: auto;
+    left: auto;
+    margin-bottom: 20px;
+    text-align: center;
   }
   
   .mode-card {
     padding: 25px 15px;
   }
   
-  .mode-icon {
-    font-size: 2.5rem;
+  .mode-card h3 {
+    font-size: 20px;
+  }
+  
+  .mode-card p {
+    font-size: 14px;
+  }
+  
+  .back-btn {
+    top: 10px;
+    right: 10px;
   }
 }
 
 @media (max-width: 480px) {
   .home-content {
-    padding: 25px 20px;
+    padding: 25px 15px;
   }
   
-  .rithm-gradient-text {
-    font-size: 1.8rem;
+  .home-content h1, .rithm-gradient-text {
+    font-size: 24px;
   }
   
-  h2 {
-    font-size: 1.1rem;
+  .home-content h2 {
+    font-size: 16px;
   }
   
   .mode-title {
-    font-size: 1.5rem;
+    font-size: 24px;
+  }
+  
+  .mode-description {
+    font-size: 16px;
   }
   
   .mode-card {
@@ -349,11 +383,11 @@ h2 {
   }
   
   .mode-card h3 {
-    font-size: 1.3rem;
+    font-size: 18px;
   }
   
   .mode-card p {
-    font-size: 0.9rem;
+    font-size: 13px;
   }
   
   .form-group input {
@@ -362,6 +396,6 @@ h2 {
   
   .action-btn {
     padding: 12px;
-    font-size: 1rem;
+    font-size: 16px;
   }
 }
