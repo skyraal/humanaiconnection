@@ -5,7 +5,24 @@ import Home from './components/Home';
 import GameRoom from './components/GameRoom';
 import './App.css';
 
-const socket = io.connect(process.env.REACT_APP_BACKEND_URL || 'http://localhost:3001');
+// Determine the correct backend URL
+const getBackendUrl = () => {
+  // Check for environment variable first
+  if (process.env.REACT_APP_BACKEND_URL) {
+    return process.env.REACT_APP_BACKEND_URL;
+  }
+  
+  // Check if we're in production
+  if (process.env.NODE_ENV === 'production') {
+    // Use the correct production backend URL
+    return 'https://humanaiconnection.onrender.com';
+  }
+  
+  // Development URL
+  return 'http://localhost:3001';
+};
+
+const socket = io.connect(getBackendUrl());
 
 function App() {
   // Renamed to isConnected to avoid eslint warning
@@ -15,7 +32,7 @@ function App() {
   useEffect(() => {
     socket.on('connect', () => {
       setIsConnected(true);
-      console.log('Connected to server');
+      console.log('Connected to server:', getBackendUrl());
     });
     
     socket.on('disconnect', () => {
