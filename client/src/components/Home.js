@@ -7,13 +7,13 @@ function Home({ socket, setRoomData }) {
   const [roomId, setRoomId] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [mode, setMode] = useState(''); // 'create' or 'join'
   const navigate = useNavigate();
 
   useEffect(() => {
     const handleRoomCreated = (data) => {
       console.log('Room created data:', data);
       setIsLoading(false);
-      // Store both the connection data and room data
       setRoomData({...data, room: data.room}); 
       navigate(`/room/${data.roomId}`);
     };
@@ -31,7 +31,6 @@ function Home({ socket, setRoomData }) {
       setIsLoading(false);
     };
     
-    // Add event listeners
     socket.on('room_created', handleRoomCreated);
     socket.on('room_joined', handleRoomJoined);
     socket.on('error', handleSocketError);
@@ -45,17 +44,17 @@ function Home({ socket, setRoomData }) {
 
   const validateInputs = () => {
     if (!username.trim()) {
-      setError('Please enter a username');
+      setError('Please enter your name');
       return false;
     }
     
     if (username.trim().length < 2) {
-      setError('Username must be at least 2 characters long');
+      setError('Name must be at least 2 characters long');
       return false;
     }
     
     if (username.trim().length > 20) {
-      setError('Username must be less than 20 characters');
+      setError('Name must be less than 20 characters');
       return false;
     }
     
@@ -94,40 +93,108 @@ function Home({ socket, setRoomData }) {
     }
   };
 
-  return (
-    <div className="home-container">
-       <div className="rithm-logo"><img src='logo.png' id='rithm-logo' alt="Rithm Logo"></img></div>
-        
-      <div className="home-content">
-       
-        <h1 className="rithm-gradient-text">Building human connection</h1>
-        <h2>in the age of AI</h2>
-        
-        <div className="form-group">
-          <label htmlFor="username">Your Name:</label>
-          <input
-            type="text"
-            id="username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            onKeyPress={(e) => handleKeyPress(e, createRoom)}
-            placeholder="Enter your name"
-            disabled={isLoading}
-            maxLength={20}
-          />
+  const resetMode = () => {
+    setMode('');
+    setError('');
+    setRoomId('');
+  };
+
+  // Initial mode selection screen
+  if (!mode) {
+    return (
+      <div className="home-container">
+        <div className="rithm-logo">
+          <img src='logo.png' id='rithm-logo' alt="Rithm Logo" />
         </div>
         
-        <div className="buttons">
-          <button 
-            onClick={createRoom} 
-            className="create-btn"
-            disabled={isLoading}
-          >
-            {isLoading ? 'Creating...' : 'Create New Game'}
-          </button>
+        <div className="home-content">
+          <h1 className="rithm-gradient-text">Building human connection</h1>
+          <h2>in the age of AI</h2>
           
-          <div className="join-section">
-            <h3>Already have a game code?</h3>
+          <div className="mode-selection">
+            <div className="mode-card" onClick={() => setMode('create')}>
+              <div className="mode-icon">🎮</div>
+              <h3>Start a New Game</h3>
+              <p>Create a room and invite friends to join</p>
+              <button className="mode-btn create-mode">Start Game</button>
+            </div>
+            
+            <div className="mode-card" onClick={() => setMode('join')}>
+              <div className="mode-icon">🎯</div>
+              <h3>Join a Game</h3>
+              <p>Enter a room code to join an existing game</p>
+              <button className="mode-btn join-mode">Join Game</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Create room flow
+  if (mode === 'create') {
+    return (
+      <div className="home-container">
+        <div className="rithm-logo">
+          <img src='logo.png' id='rithm-logo' alt="Rithm Logo" />
+        </div>
+        
+        <div className="home-content">
+          <button className="back-btn" onClick={resetMode}>← Back</button>
+          
+          <h1 className="mode-title">Start a New Game</h1>
+          <p className="mode-description">
+            You'll be the host and can share the room code with friends
+          </p>
+          
+          <div className="form-section">
+            <div className="form-group">
+              <label htmlFor="username">Your Name:</label>
+              <input
+                type="text"
+                id="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                onKeyPress={(e) => handleKeyPress(e, createRoom)}
+                placeholder="Enter your name"
+                disabled={isLoading}
+                maxLength={20}
+                autoFocus
+              />
+            </div>
+            
+            <button 
+              onClick={createRoom} 
+              className="action-btn create-btn"
+              disabled={isLoading || !username.trim()}
+            >
+              {isLoading ? 'Creating Game...' : 'Create Game Room'}
+            </button>
+          </div>
+          
+          {error && <p className="error-message">{error}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  // Join room flow
+  if (mode === 'join') {
+    return (
+      <div className="home-container">
+        <div className="rithm-logo">
+          <img src='logo.png' id='rithm-logo' alt="Rithm Logo" />
+        </div>
+        
+        <div className="home-content">
+          <button className="back-btn" onClick={resetMode}>← Back</button>
+          
+          <h1 className="mode-title">Join a Game</h1>
+          <p className="mode-description">
+            Enter the 6-character room code shared by the game host
+          </p>
+          
+          <div className="form-section">
             <div className="form-group">
               <label htmlFor="roomId">Room Code:</label>
               <input
@@ -135,26 +202,45 @@ function Home({ socket, setRoomData }) {
                 id="roomId"
                 value={roomId}
                 onChange={(e) => setRoomId(e.target.value.toUpperCase())}
-                onKeyPress={(e) => handleKeyPress(e, joinRoom)}
-                placeholder="Enter room code"
+                onKeyPress={(e) => handleKeyPress(e, () => {
+                  if (roomId.length === 6) joinRoom();
+                })}
+                placeholder="ABC123"
                 disabled={isLoading}
                 maxLength={6}
+                autoFocus
+                className="room-code-input"
               />
             </div>
+            
+            <div className="form-group">
+              <label htmlFor="username">Your Name:</label>
+              <input
+                type="text"
+                id="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                onKeyPress={(e) => handleKeyPress(e, joinRoom)}
+                placeholder="Enter your name"
+                disabled={isLoading}
+                maxLength={20}
+              />
+            </div>
+            
             <button 
               onClick={joinRoom} 
-              className="join-btn"
-              disabled={isLoading}
+              className="action-btn join-btn"
+              disabled={isLoading || !username.trim() || roomId.length !== 6}
             >
-              {isLoading ? 'Joining...' : 'Join Existing Game'}
+              {isLoading ? 'Joining Game...' : 'Join Game'}
             </button>
           </div>
+          
+          {error && <p className="error-message">{error}</p>}
         </div>
-        
-        {error && <p className="error-message">{error}</p>}
       </div>
-    </div>
-  );
+    );
+  }
 }
 
 export default Home;
