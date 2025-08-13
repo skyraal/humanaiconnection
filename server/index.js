@@ -28,17 +28,30 @@ const io = new Server(server, {
 const rooms = new Map();
 const socketToRoom = new Map(); // Track which room each socket is in
 const cards = [
-  "Preparing to have a tough conversation by practicing it first with an AI bot.",
-  "Checking in with your AI girlfriend/boyfriend throughout the day.",
-  "Generating AI bedtime stories for a younger sibling, using personal information about your family to customize them.",
-  "Creating a holographic version of yourself to attend a far-away family gathering.",
-  "Using a friend's photo to create a deep fake video as a joke.",
-  "Letting AI auto-reply to your friends' messages when you're feeling overwhelmed.",
-  "Using video calls to stay connected with long-distance family members.",
-  "Checking your partner's phone without their knowledge.",
-  "Playing online multiplayer games with friends during a pandemic.",
-  "Using AI to write personalized messages to loved ones.",
-  "Tasking AI with tracking special moments in your friends' lives and sending personalized messages and gifts", "Engage in AI-simulations that help you see the world/ scenarios from someone else's perspective", "Participating in a virtual AI-facilitated group therapy session", "Using a tool to 'optimize' your social media pictures", "Venting frustrations to an AI bot", "Create a memory bank that you and your friends share and can 'look into' for years to come", "Using AI that tracks your emotions and translates them into visual art that others can see (like a public 'mood ring')", "Letting an AI summarize your friend's texts when you don't feel like reading long messages", "Asking an AI chatbot for advice on dealing with feelings of loneliness", "Asking AI to write a heartfelt speech for a friend's special occasion", "Talking to an AI preserved version of a beloved deceased relative or ancestor", "Generating an AI-created message to apologize to a friend after a fight", "Using AI to translate a message for someone who speaks another language", "Making AI version of your favorite movie/book/tv character to chat with when you are bored", "Having an AI version of you sign on to class", "Using AI to analyze all of your personal data (emails, texts, search history), to recommend romantic partners", "Using a hidden AI companion in your ear to prompt you with topics, questions, and responses while you're in conversation with someone", "Using AI to rate your physical appearance and offer tips to improve it"
+"Preparing to have a tough conversation by practicing it first with an AI bot.",
+"Checking in with your AI girlfriend/boyfriend throughout the day.",
+"Generating AI bedtime stories for a younger sibling, using personal information about your family to customize them.",
+"Creating a holographic version of yourself to attend a far-away family gathering.",
+"Using a friend's photo to create a deep fake video as a joke.",
+"Letting AI auto-reply to your friends' messages when you're feeling overwhelmed.",
+"Talking to an AI preserved version of a beloved deceased relative or ancestor.",
+"Generating an AI-created message to apologize to a friend after a fight.",
+"Using AI to rate your physical appearance and offer tips to improve it.",
+"Using AI to translate a message for someone who speaks another language.",
+"Using AI to analyze all of your personal data (emails, texts, search history) to recommend romantic partners.",
+"Asking AI to write a heartfelt speech for a friend's special occasion.",
+"Having an AI version of you sign on to class.",
+"Making an AI version of your favorite movie/book/tv character to chat with when you are bored.",
+"Using a hidden AI companion in your ear to prompt you with topics, questions, and responses while you're in conversation with someone.",
+"Participating in a virtual AI-facilitated group therapy session.",
+"Engaging in AI simulations that help you see the world/scenarios from someone else's perspective.",
+"Tasking AI with tracking special moments in your friends' lives and sending personalized messages and gifts.",
+"Using a tool to 'optimize' your social media pictures.",
+"Using AI that tracks your emotions and translates them into visual art that others can see (like a public 'mood ring').",
+"Asking an AI chatbot for advice on dealing with feelings of loneliness.",
+"Creating a memory bank that you and your friends share and can 'look into' for years to come.",
+"Letting an AI summarize your friend's texts when you don't feel like reading long messages.",
+"Venting frustrations to an AI bot."
 ];
 
 // Fisher-Yates shuffle algorithm to randomize card order
