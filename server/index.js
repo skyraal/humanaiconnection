@@ -5,22 +5,50 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
+const cluster = require('cluster');
+const os = require('os');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Rate limiting for scalability
+const rateLimit = require('express-rate-limit');
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, // limit each IP to 1000 requests per windowMs
+  message: 'Too many requests from this IP',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(limiter);
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
-      ? ['https://humanaiconnectiongame.onrender.com'] 
+      ? ['https://humanaiconnectiongame.onrender.com', 'https://your-domain.com'] 
       : '*',
     methods: ['GET', 'POST']
   },
   transports: ['websocket', 'polling'],
   pingTimeout: 60000,
-  pingInterval: 25000
+  pingInterval: 25000,
+  maxHttpBufferSize: 1e6, // 1MB
+  allowEIO3: true,
+  // Scalability optimizations
+  allowUpgrades: true,
+  perMessageDeflate: {
+    threshold: 32768,
+    zlibInflateOptions: {
+      chunkSize: 10 * 1024
+    },
+    zlibDeflateOptions: {
+      level: 6
+    }
+  }
 });
 
 // Game cards
@@ -69,15 +97,29 @@ function generateRoomId() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// Room management class with improved state handling
+// Room management class with improved scalability
 class RoomManager {
   constructor() {
     this.rooms = new Map();
     this.socketToRoom = new Map(); // Track which room each socket is in
     this.cleanupInterval = setInterval(() => this.cleanupInactiveRooms(), 30 * 60 * 1000); // 30 minutes
+    this.maxRooms = 1000; // Maximum number of concurrent rooms
+    this.maxPlayersPerRoom = 50; // Increased from 20 to 50
+    this.stats = {
+      totalConnections: 0,
+      activeRooms: 0,
+      totalPlayers: 0,
+      peakConnections: 0,
+      peakRooms: 0
+    };
   }
 
   createRoom(hostId, username) {
+    // Check if we've reached maximum rooms
+    if (this.rooms.size >= this.maxRooms) {
+      throw new Error('Maximum number of rooms reached. Please try again later.');
+    }
+
     const roomId = generateRoomId();
     const room = {
       id: roomId,
@@ -91,7 +133,7 @@ class RoomManager {
       shuffledCards: [],
       createdAt: Date.now(),
       lastActivity: Date.now(),
-      maxPlayers: 20,
+      maxPlayers: this.maxPlayersPerRoom,
       status: 'waiting', // waiting, playing, finished
       gameState: 'lobby' // lobby, voting, discussing, finished
     };
@@ -99,7 +141,14 @@ class RoomManager {
     this.rooms.set(roomId, room);
     this.socketToRoom.set(hostId, roomId);
     
-    console.log(`Room created: ${roomId} by ${username}`);
+    // Update stats
+    this.stats.activeRooms = this.rooms.size;
+    this.stats.totalPlayers += 1;
+    if (this.stats.activeRooms > this.stats.peakRooms) {
+      this.stats.peakRooms = this.stats.activeRooms;
+    }
+    
+    console.log(`Room created: ${roomId} by ${username} (Total rooms: ${this.rooms.size})`);
     return room;
   }
 
@@ -144,6 +193,8 @@ class RoomManager {
     this.socketToRoom.set(playerId, roomId);
 
     this.rooms.set(roomId, room);
+    this.stats.totalPlayers += 1;
+    
     return room;
   }
 
@@ -174,6 +225,9 @@ class RoomManager {
     room.lastActivity = Date.now();
     this.rooms.set(roomId, room);
     this.socketToRoom.delete(playerId);
+    
+    // Update stats
+    this.stats.totalPlayers -= 1;
     
     return { room, removedPlayer };
   }
@@ -378,8 +432,13 @@ class RoomManager {
         room.players.forEach(player => {
           this.socketToRoom.delete(player.id);
         });
+        
+        // Update stats
+        this.stats.totalPlayers -= room.players.length;
       }
     }
+    
+    this.stats.activeRooms = this.rooms.size;
   }
 
   getActiveRooms() {
@@ -390,13 +449,29 @@ class RoomManager {
     const roomId = this.socketToRoom.get(socketId);
     return roomId ? this.getRoom(roomId) : null;
   }
+
+  getStats() {
+    return {
+      ...this.stats,
+      activeRooms: this.rooms.size,
+      totalConnections: io.engine.clientsCount
+    };
+  }
+
+  updateConnectionStats() {
+    this.stats.totalConnections = io.engine.clientsCount;
+    if (this.stats.totalConnections > this.stats.peakConnections) {
+      this.stats.peakConnections = this.stats.totalConnections;
+    }
+  }
 }
 
 const roomManager = new RoomManager();
 
 // Socket connection handler with improved error handling and state management
 io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.id}`);
+  console.log(`User connected: ${socket.id} (Total connections: ${io.engine.clientsCount})`);
+  roomManager.updateConnectionStats();
   
   let currentRoomId = null;
   let currentUsername = null;
@@ -459,7 +534,7 @@ io.on('connection', (socket) => {
       });
     } catch (error) {
       console.error('Error creating room:', error);
-      socket.emit('error', { message: 'Failed to create room' });
+      socket.emit('error', { message: error.message || 'Failed to create room' });
     }
   });
 
@@ -643,7 +718,8 @@ io.on('connection', (socket) => {
 
   // Handle disconnection
   socket.on('disconnect', () => {
-    console.log(`User disconnected: ${socket.id}`);
+    console.log(`User disconnected: ${socket.id} (Remaining connections: ${io.engine.clientsCount - 1})`);
+    roomManager.updateConnectionStats();
     
     if (currentRoomId) {
       try {
@@ -672,11 +748,13 @@ io.on('connection', (socket) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  const stats = roomManager.getStats();
   res.json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
-    activeRooms: roomManager.getActiveRooms().length,
-    totalConnections: io.engine.clientsCount
+    ...stats,
+    memory: process.memoryUsage(),
+    uptime: process.uptime()
   });
 });
 
@@ -689,55 +767,77 @@ app.get('/admin', (req, res) => {
       <title>Game Admin Dashboard</title>
       <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-        .container { max-width: 1200px; margin: 0 auto; }
+        .container { max-width: 1400px; margin: 0 auto; }
         h1 { color: #333; text-align: center; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }
-        .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .stat-card h3 { margin: 0 0 10px 0; color: #555; }
-        .stat-value { font-size: 2em; font-weight: bold; color: #2196F3; }
-        .stat-label { color: #666; font-size: 0.9em; }
-        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
+        .stat-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .stat-card h3 { margin: 0 0 8px 0; color: #555; font-size: 14px; }
+        .stat-value { font-size: 1.8em; font-weight: bold; color: #2196F3; }
+        .stat-label { color: #666; font-size: 0.8em; }
+        .performance { background: #e8f5e8; border-left: 4px solid #4caf50; }
+        .warning { background: #fff3cd; border-left: 4px solid #ffc107; }
+        .critical { background: #f8d7da; border-left: 4px solid #dc3545; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); font-size: 12px; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #eee; }
         th { background: #f8f9fa; font-weight: 600; }
         tr:hover { background-color: #f8f9fa; }
+        .scrollable { max-height: 400px; overflow-y: auto; }
       </style>
     </head>
     <body>
       <div class="container">
-        <h1>Game Admin Dashboard</h1>
+        <h1>Game Admin Dashboard - Scalable System</h1>
         
         <div class="stats-grid">
-          <div class="stat-card">
+          <div class="stat-card performance">
             <h3>Active Rooms</h3>
             <div class="stat-value" id="activeRooms">-</div>
             <div class="stat-label">Currently running games</div>
           </div>
-          <div class="stat-card">
+          <div class="stat-card performance">
             <h3>Total Players</h3>
             <div class="stat-value" id="totalPlayers">-</div>
             <div class="stat-label">Players in active games</div>
           </div>
-          <div class="stat-card">
+          <div class="stat-card performance">
             <h3>Active Connections</h3>
             <div class="stat-value" id="activeConnections">-</div>
             <div class="stat-label">Current socket connections</div>
           </div>
+          <div class="stat-card performance">
+            <h3>Peak Connections</h3>
+            <div class="stat-value" id="peakConnections">-</div>
+            <div class="stat-label">Highest concurrent connections</div>
+          </div>
+          <div class="stat-card performance">
+            <h3>Peak Rooms</h3>
+            <div class="stat-value" id="peakRooms">-</div>
+            <div class="stat-label">Highest concurrent rooms</div>
+          </div>
+          <div class="stat-card performance">
+            <h3>Max Capacity</h3>
+            <div class="stat-value" id="maxCapacity">-</div>
+            <div class="stat-label">Theoretical max players</div>
+          </div>
         </div>
 
-        <table>
-          <thead>
-            <tr>
-              <th>Room ID</th>
-              <th>Host</th>
-              <th>Players</th>
-              <th>Status</th>
-              <th>Game State</th>
-              <th>Current Card</th>
-              <th>Created</th>
-            </tr>
-          </thead>
-          <tbody id="roomsTableBody"></tbody>
-        </table>
+        <div class="scrollable">
+          <table>
+            <thead>
+              <tr>
+                <th>Room ID</th>
+                <th>Host</th>
+                <th>Players</th>
+                <th>Status</th>
+                <th>Game State</th>
+                <th>Current Card</th>
+                <th>Created</th>
+                <th>Last Activity</th>
+              </tr>
+            </thead>
+            <tbody id="roomsTableBody"></tbody>
+          </table>
+        </div>
       </div>
 
       <script>
@@ -748,20 +848,27 @@ app.get('/admin', (req, res) => {
               document.getElementById('activeRooms').textContent = data.activeRooms;
               document.getElementById('totalPlayers').textContent = data.totalPlayers;
               document.getElementById('activeConnections').textContent = data.activeConnections;
+              document.getElementById('peakConnections').textContent = data.peakConnections;
+              document.getElementById('peakRooms').textContent = data.peakRooms;
+              document.getElementById('maxCapacity').textContent = (data.activeRooms * 50).toLocaleString();
               
               const tableBody = document.getElementById('roomsTableBody');
               tableBody.innerHTML = '';
               
               data.rooms.forEach(room => {
                 const row = document.createElement('tr');
+                const lastActivity = new Date(room.lastActivity);
+                const timeAgo = Math.floor((Date.now() - room.lastActivity) / 1000 / 60);
+                
                 row.innerHTML = \`
                   <td>\${room.id}</td>
                   <td>\${room.players.find(p => p.id === room.host)?.username || 'Unknown'}</td>
-                  <td>\${room.players.length}</td>
+                  <td>\${room.players.length}/50</td>
                   <td>\${room.status}</td>
                   <td>\${room.gameState}</td>
                   <td>\${room.currentCardIndex + 1}/\${room.shuffledCards?.length || '?'}</td>
-                  <td>\${new Date(room.createdAt).toLocaleString()}</td>
+                  <td>\${new Date(room.createdAt).toLocaleTimeString()}</td>
+                  <td>\${timeAgo}m ago</td>
                 \`;
                 tableBody.appendChild(row);
               });
@@ -770,7 +877,7 @@ app.get('/admin', (req, res) => {
         }
         
         updateStats();
-        setInterval(updateStats, 10000);
+        setInterval(updateStats, 5000);
       </script>
     </body>
     </html>
@@ -781,12 +888,10 @@ app.get('/admin', (req, res) => {
 
 app.get('/admin/stats', (req, res) => {
   const activeRooms = roomManager.getActiveRooms();
-  const totalPlayers = activeRooms.reduce((sum, room) => sum + room.players.length, 0);
+  const stats = roomManager.getStats();
   
   res.json({
-    activeRooms: activeRooms.length,
-    totalPlayers,
-    activeConnections: io.engine.clientsCount,
+    ...stats,
     rooms: activeRooms.map(room => ({
       id: room.id,
       host: room.host,
@@ -795,7 +900,8 @@ app.get('/admin/stats', (req, res) => {
       gameState: room.gameState,
       currentCardIndex: room.currentCardIndex,
       shuffledCards: room.shuffledCards,
-      createdAt: room.createdAt
+      createdAt: room.createdAt,
+      lastActivity: room.lastActivity
     }))
   });
 });
@@ -833,8 +939,11 @@ app.get('/saved-games', (req, res) => {
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Admin dashboard available at http://localhost:${PORT}/admin`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📊 Admin dashboard available at http://localhost:${PORT}/admin`);
+  console.log(`💪 System configured for 100+ concurrent users`);
+  console.log(`🏠 Max rooms: 1000 | Max players per room: 50`);
+  console.log(`📈 Theoretical max capacity: 50,000 concurrent players`);
 });
 
 // Graceful shutdown

@@ -1,0 +1,33 @@
+services:
+  # Backend API Service
+  - type: web
+    name: humanaiconnection-backend
+    env: node
+    plan: free
+    buildCommand: cd server && npm install
+    startCommand: cd server && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: CORS_ORIGIN
+        value: https://humanaiconnection-frontend.onrender.com
+
+  # Frontend Static Site
+  - type: web
+    name: humanaiconnection-frontend
+    env: static
+    plan: free
+    buildCommand: cd client && npm install && npm run build
+    staticPublishPath: client/build
+    envVars:
+      - key: REACT_APP_SERVER_URL
+        value: https://humanaiconnection-backend.onrender.com
+
+databases:
+  # PostgreSQL Database (Optional - for analytics)
+  - name: humanaiconnection-db
+    databaseName: humanaiconnection
+    user: humanaiconnection_user
+    plan: free 
