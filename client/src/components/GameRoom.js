@@ -19,21 +19,14 @@ function GameRoom({ socket, roomData, setRoomData }) {
   const [error, setError] = useState(null);
   const [isLateJoiner, setIsLateJoiner] = useState(false);
   const [showLateJoinerMessage, setShowLateJoinerMessage] = useState(false);
-  const [showReconnectionMessage, setShowReconnectionMessage] = useState(false);
   
   console.log("Initial roomData:", roomData);
   console.log("Initial room state:", room);
   
   useEffect(() => {
-    // Try to reconnect first if we have a player ID
-    if (roomData?.playerId) {
-      console.log('Attempting reconnection with player ID:', roomData.playerId);
-      socket.emit('reconnect_player', { roomId, playerId: roomData.playerId });
-    } else {
-      // Request room data from server
-      console.log('Requesting room data for:', roomId);
-      socket.emit('get_room_data', roomId);
-    }
+    // Request room data from server
+    console.log('Requesting room data for:', roomId);
+    socket.emit('get_room_data', roomId);
 
     // Set up socket event listeners
     const handleRoomUpdate = (updatedRoom) => {
@@ -142,16 +135,6 @@ function GameRoom({ socket, roomData, setRoomData }) {
         isHost: data.isHost
       });
       setIsLoading(false);
-      
-      // Show reconnection success message
-      setShowReconnectionMessage(true);
-      setTimeout(() => setShowReconnectionMessage(false), 3000);
-    };
-
-    const handlePlayerReconnected = (data) => {
-      console.log('Player reconnected:', data);
-      // Update room data to reflect the reconnection
-      socket.emit('get_room_data', roomId);
     };
 
     // Add event listeners
@@ -167,7 +150,6 @@ function GameRoom({ socket, roomData, setRoomData }) {
     socket.on('error', handleError);
     socket.on('room_joined', handleRoomJoined);
     socket.on('reconnection_success', handleReconnectionSuccess);
-    socket.on('player_reconnected', handlePlayerReconnected);
     
     // Cleanup function
     return () => {
@@ -183,7 +165,6 @@ function GameRoom({ socket, roomData, setRoomData }) {
       socket.off('error', handleError);
       socket.off('room_joined', handleRoomJoined);
       socket.off('reconnection_success', handleReconnectionSuccess);
-      socket.off('player_reconnected', handlePlayerReconnected);
     };
   }, [socket, roomData, setRoomData, roomId]);
   
@@ -297,11 +278,7 @@ function GameRoom({ socket, roomData, setRoomData }) {
           </div>
         )}
         
-        {showReconnectionMessage && (
-          <div className="reconnection-message">
-            <p>Successfully reconnected to the game!</p>
-          </div>
-        )}
+
         
         <div className="sidebar">
           <PlayerList 
