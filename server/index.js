@@ -383,12 +383,12 @@ io.on('connection', (socket) => {
       }
 
       if (!room.gameStarted) {
-        socket.emit('error', { message: 'Game not started' });
+        socket.emit('error', { message: 'Game not started - please wait for the host to start the game' });
         return;
       }
 
       if (!['support', 'erode', 'depends'].includes(choice)) {
-        socket.emit('error', { message: 'Invalid choice' });
+        socket.emit('error', { message: 'Invalid choice - must be support, erode, or depends' });
         return;
       }
 
@@ -524,12 +524,12 @@ io.on('connection', (socket) => {
       }
 
       if (!room.revealChoices) {
-        socket.emit('error', { message: 'Choices not revealed yet' });
+        socket.emit('error', { message: 'Choices not revealed yet - please wait for the host to reveal choices' });
         return;
       }
 
       if (!['support', 'erode', 'depends'].includes(choice)) {
-        socket.emit('error', { message: 'Invalid choice' });
+        socket.emit('error', { message: 'Invalid choice - must be support, erode, or depends' });
         return;
       }
 
@@ -599,10 +599,10 @@ io.on('connection', (socket) => {
   });
 });
 
-// Cleanup inactive rooms periodically (every 30 minutes)
+// Cleanup inactive rooms periodically (every 60 minutes)
 setInterval(() => {
   const now = Date.now();
-  const inactiveThreshold = 30 * 60 * 1000; // 30 minutes
+  const inactiveThreshold = 60 * 60 * 1000; // 60 minutes (1 hour)
   
   for (const [roomId, room] of rooms.entries()) {
     if (now - room.lastActivity > inactiveThreshold) {
@@ -651,7 +651,7 @@ app.get('/stats', (req, res) => {
 // Cleanup inactive rooms endpoint (for manual cleanup)
 app.post('/cleanup', (req, res) => {
   const now = Date.now();
-  const inactiveThreshold = 30 * 60 * 1000; // 30 minutes
+  const inactiveThreshold = 60 * 60 * 1000; // 60 minutes (1 hour)
   let cleanedRooms = 0;
   
   for (const [roomId, room] of rooms.entries()) {

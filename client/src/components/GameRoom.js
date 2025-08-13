@@ -92,6 +92,21 @@ function GameRoom({ socket, roomData, setRoomData }) {
       }
     };
 
+    const handleChoiceUpdated = (data) => {
+      console.log('Choice updated:', data);
+      // Update the room state with the new choice
+      setRoom(prevRoom => {
+        if (!prevRoom) return prevRoom;
+        return {
+          ...prevRoom,
+          playerChoices: {
+            ...prevRoom.playerChoices,
+            [data.playerId]: data.choice
+          }
+        };
+      });
+    };
+
     const handleError = (error) => {
       console.error('Socket error:', error);
       setError(error.message);
@@ -121,6 +136,7 @@ function GameRoom({ socket, roomData, setRoomData }) {
     socket.on('game_over', handleGameOver);
     socket.on('player_left', handlePlayerLeft);
     socket.on('new_host', handleNewHost);
+    socket.on('choice_updated', handleChoiceUpdated);
     socket.on('error', handleError);
     socket.on('room_joined', handleRoomJoined);
     
@@ -134,6 +150,7 @@ function GameRoom({ socket, roomData, setRoomData }) {
       socket.off('game_over', handleGameOver);
       socket.off('player_left', handlePlayerLeft);
       socket.off('new_host', handleNewHost);
+      socket.off('choice_updated', handleChoiceUpdated);
       socket.off('error', handleError);
       socket.off('room_joined', handleRoomJoined);
     };

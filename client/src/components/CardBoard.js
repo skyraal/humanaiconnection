@@ -20,6 +20,26 @@ function CardBoard({ card, playerChoice, onCardDrop, revealChoices, playerChoice
     return player ? player.username : 'Unknown';
   };
   
+  // Calculate choice counts
+  const getChoiceCounts = () => {
+    const counts = {
+      support: 0,
+      erode: 0,
+      depends: 0
+    };
+    
+    Object.values(playerChoices).forEach(choice => {
+      if (choice && counts.hasOwnProperty(choice)) {
+        counts[choice]++;
+      }
+    });
+    
+    return counts;
+  };
+  
+  const choiceCounts = getChoiceCounts();
+  const totalChoices = choiceCounts.support + choiceCounts.erode + choiceCounts.depends;
+  
   const renderPlayerCards = (column) => {
     if (!revealChoices) return null;
     
@@ -72,6 +92,26 @@ function CardBoard({ card, playerChoice, onCardDrop, revealChoices, playerChoice
           onDragEnd={handleDragEnd}
         >
           {card}
+        </div>
+      </div>
+      
+      {/* Choice Counter */}
+      <div className="choice-counter">
+        <div className="counter-item">
+          <span className="counter-label">Support:</span>
+          <span className="counter-value">{choiceCounts.support}</span>
+        </div>
+        <div className="counter-item">
+          <span className="counter-label">It Depends:</span>
+          <span className="counter-value">{choiceCounts.depends}</span>
+        </div>
+        <div className="counter-item">
+          <span className="counter-label">Erode:</span>
+          <span className="counter-value">{choiceCounts.erode}</span>
+        </div>
+        <div className="counter-total">
+          <span className="total-label">Total:</span>
+          <span className="total-value">{totalChoices}</span>
         </div>
       </div>
       
