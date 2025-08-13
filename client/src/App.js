@@ -15,7 +15,7 @@ const getServerUrl = () => {
   // Check if we're in production
   if (process.env.NODE_ENV === 'production') {
     // Default production URL (will be overridden by environment variable)
-    return 'https://humanaiconnection-backend.onrender.com';
+    return 'https://humanaiconnection.onrender.com';
   }
   
   // Development URL
