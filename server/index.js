@@ -5,6 +5,8 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const Redis = require('ioredis');
 const rateLimit = require('express-rate-limit');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 
 const app = express();
 app.use(cors());
@@ -17,6 +19,134 @@ const limiter = rateLimit({
   message: 'Too many requests from this IP'
 });
 app.use(limiter);
+
+// Initialize SQLite database for analytics
+const db = new sqlite3.Database(path.join(__dirname, 'game_analytics.db'));
+
+// Create tables for analytics
+db.serialize(() => {
+  // User visits tracking
+  db.run(`CREATE TABLE IF NOT EXISTS user_visits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    ip_address TEXT,
+    user_agent TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    page_visited TEXT
+  )`);
+
+  // Game sessions
+  db.run(`CREATE TABLE IF NOT EXISTS game_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL,
+    host_username TEXT,
+    total_players INTEGER,
+    game_started BOOLEAN DEFAULT 0,
+    game_completed BOOLEAN DEFAULT 0,
+    cards_played INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    ended_at DATETIME,
+    session_duration INTEGER
+  )`);
+
+  // Player participation
+  db.run(`CREATE TABLE IF NOT EXISTS player_participation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER,
+    room_id TEXT NOT NULL,
+    username TEXT NOT NULL,
+    socket_id TEXT,
+    joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    left_at DATETIME,
+    was_host BOOLEAN DEFAULT 0,
+    cards_answered INTEGER DEFAULT 0,
+    FOREIGN KEY (session_id) REFERENCES game_sessions(id)
+  )`);
+
+  // Card responses
+  db.run(`CREATE TABLE IF NOT EXISTS card_responses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER,
+    room_id TEXT NOT NULL,
+    card_index INTEGER,
+    card_text TEXT,
+    username TEXT,
+    choice TEXT,
+    answered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES game_sessions(id)
+  )`);
+
+  // Room activity
+  db.run(`CREATE TABLE IF NOT EXISTS room_activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_data TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+});
+
+// Analytics helper functions
+const analytics = {
+  trackVisit: (req, page) => {
+    const sessionId = req.sessionID || uuidv4();
+    const stmt = db.prepare(`
+      INSERT INTO user_visits (session_id, ip_address, user_agent, page_visited)
+      VALUES (?, ?, ?, ?)
+    `);
+    stmt.run(sessionId, req.ip, req.get('User-Agent'), page);
+    stmt.finalize();
+  },
+
+  createGameSession: (roomId, hostUsername, totalPlayers) => {
+    return new Promise((resolve, reject) => {
+      const stmt = db.prepare(`
+        INSERT INTO game_sessions (room_id, host_username, total_players)
+        VALUES (?, ?, ?)
+      `);
+      stmt.run(roomId, hostUsername, totalPlayers, function(err) {
+        if (err) reject(err);
+        else resolve(this.lastID);
+      });
+      stmt.finalize();
+    });
+  },
+
+  addPlayerParticipation: (sessionId, roomId, username, socketId, isHost = false) => {
+    const stmt = db.prepare(`
+      INSERT INTO player_participation (session_id, room_id, username, socket_id, was_host)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    stmt.run(sessionId, roomId, username, socketId, isHost);
+    stmt.finalize();
+  },
+
+  recordCardResponse: (sessionId, roomId, cardIndex, cardText, username, choice) => {
+    const stmt = db.prepare(`
+      INSERT INTO card_responses (session_id, room_id, card_index, card_text, username, choice)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(sessionId, roomId, cardIndex, cardText, username, choice);
+    stmt.finalize();
+  },
+
+  updateGameSession: (sessionId, updates) => {
+    const fields = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+    const values = Object.values(updates);
+    const stmt = db.prepare(`UPDATE game_sessions SET ${fields} WHERE id = ?`);
+    stmt.run(...values, sessionId);
+    stmt.finalize();
+  },
+
+  recordRoomActivity: (roomId, eventType, eventData = null) => {
+    const stmt = db.prepare(`
+      INSERT INTO room_activity (room_id, event_type, event_data)
+      VALUES (?, ?, ?)
+    `);
+    stmt.run(roomId, eventType, JSON.stringify(eventData));
+    stmt.finalize();
+  }
+};
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -67,6 +197,7 @@ function generateRoomId() {
 class RoomManager {
   constructor() {
     this.rooms = new Map();
+    this.roomSessions = new Map(); // Track session IDs for analytics
     this.cleanupInterval = setInterval(() => this.cleanupInactiveRooms(), 40 * 60 * 1000); // 5 minutes
   }
 
@@ -85,11 +216,22 @@ class RoomManager {
       createdAt: Date.now(),
       lastActivity: Date.now(),
       maxPlayers: 20,
-      status: 'waiting' // waiting, playing, finished
+      status: 'waiting', // waiting, playing, finished
+      missedCards: [] // Track cards missed by late joiners
     };
 
     this.rooms.set(roomId, room);
     await this.saveRoomToRedis(roomId, room);
+    
+    // Create analytics session
+    try {
+      const sessionId = await analytics.createGameSession(roomId, username, 1);
+      this.roomSessions.set(roomId, sessionId);
+      analytics.addPlayerParticipation(sessionId, roomId, username, hostId, true);
+      analytics.recordRoomActivity(roomId, 'room_created', { host: username });
+    } catch (error) {
+      console.error('Failed to create analytics session:', error);
+    }
     
     console.log(`Room created: ${roomId} by ${username}`);
     return room;
@@ -128,9 +270,34 @@ class RoomManager {
       throw new Error('Player already in room');
     }
 
-    room.players.push({ id: playerId, username, ready: false, joinedAt: Date.now() });
+    const isLateJoiner = room.gameStarted && room.currentCardIndex > 0;
+    const player = { 
+      id: playerId, 
+      username, 
+      ready: false, 
+      joinedAt: Date.now(),
+      isLateJoiner,
+      missedCards: isLateJoiner ? room.currentCardIndex : 0
+    };
+
+    room.players.push(player);
     room.playerChoices[playerId] = null;
     room.lastActivity = Date.now();
+
+    // Track analytics
+    try {
+      const sessionId = this.roomSessions.get(roomId);
+      if (sessionId) {
+        analytics.addPlayerParticipation(sessionId, roomId, username, playerId, false);
+        analytics.recordRoomActivity(roomId, 'player_joined', { 
+          username, 
+          isLateJoiner,
+          currentCardIndex: room.currentCardIndex 
+        });
+      }
+    } catch (error) {
+      console.error('Failed to track player join:', error);
+    }
 
     this.rooms.set(roomId, room);
     await this.saveRoomToRedis(roomId, room);
@@ -156,6 +323,17 @@ class RoomManager {
     if (room.host === playerId) {
       if (room.players.length > 0) {
         room.host = room.players[0].id;
+        // Update analytics for new host
+        try {
+          const sessionId = this.roomSessions.get(roomId);
+          if (sessionId) {
+            analytics.recordRoomActivity(roomId, 'host_transferred', { 
+              newHost: room.players[0].username 
+            });
+          }
+        } catch (error) {
+          console.error('Failed to track host transfer:', error);
+        }
       } else {
         // Room is empty, mark for deletion
         room.status = 'finished';
@@ -165,6 +343,18 @@ class RoomManager {
     room.lastActivity = Date.now();
     this.rooms.set(roomId, room);
     await this.saveRoomToRedis(roomId, room);
+    
+    // Track player departure
+    try {
+      const sessionId = this.roomSessions.get(roomId);
+      if (sessionId) {
+        analytics.recordRoomActivity(roomId, 'player_left', { 
+          username: removedPlayer.username 
+        });
+      }
+    } catch (error) {
+      console.error('Failed to track player departure:', error);
+    }
     
     return { room, removedPlayer };
   }
@@ -192,6 +382,19 @@ class RoomManager {
       updates.playerChoices[player.id] = null;
     });
 
+    // Track game start
+    try {
+      const sessionId = this.roomSessions.get(roomId);
+      if (sessionId) {
+        analytics.updateGameSession(sessionId, { game_started: 1 });
+        analytics.recordRoomActivity(roomId, 'game_started', { 
+          totalPlayers: room.players.length 
+        });
+      }
+    } catch (error) {
+      console.error('Failed to track game start:', error);
+    }
+
     return await this.updateRoom(roomId, updates);
   }
 
@@ -210,6 +413,24 @@ class RoomManager {
     room.lastActivity = Date.now();
     this.rooms.set(roomId, room);
     await this.saveRoomToRedis(roomId, room);
+    
+    // Track card response
+    try {
+      const sessionId = this.roomSessions.get(roomId);
+      if (sessionId && player) {
+        const cardText = room.shuffledCards[room.currentCardIndex];
+        analytics.recordCardResponse(
+          sessionId, 
+          roomId, 
+          room.currentCardIndex, 
+          cardText, 
+          player.username, 
+          choice
+        );
+      }
+    } catch (error) {
+      console.error('Failed to track card response:', error);
+    }
     
     return room;
   }
@@ -249,6 +470,20 @@ class RoomManager {
         updates.playerChoices[player.id] = null;
       });
 
+      // Track card progression
+      try {
+        const sessionId = this.roomSessions.get(roomId);
+        if (sessionId) {
+          analytics.updateGameSession(sessionId, { cards_played: nextIndex });
+          analytics.recordRoomActivity(roomId, 'next_card', { 
+            cardIndex: nextIndex,
+            cardText: room.shuffledCards[nextIndex]
+          });
+        }
+      } catch (error) {
+        console.error('Failed to track card progression:', error);
+      }
+
       return await this.updateRoom(roomId, updates);
     } else {
       // Game is over
@@ -257,9 +492,49 @@ class RoomManager {
         lastActivity: Date.now()
       };
       
+      // Track game completion
+      try {
+        const sessionId = this.roomSessions.get(roomId);
+        if (sessionId) {
+          const duration = Date.now() - room.createdAt;
+          analytics.updateGameSession(sessionId, { 
+            game_completed: 1, 
+            ended_at: new Date().toISOString(),
+            session_duration: duration
+          });
+          analytics.recordRoomActivity(roomId, 'game_completed', { 
+            totalCards: room.shuffledCards.length,
+            duration: duration
+          });
+        }
+      } catch (error) {
+        console.error('Failed to track game completion:', error);
+      }
+      
       await this.saveGameResults(room, true);
       return await this.updateRoom(roomId, updates);
     }
+  }
+
+  // Get missed cards for late joiners
+  getMissedCards(roomId, playerId) {
+    const room = this.rooms.get(roomId);
+    if (!room || !room.gameStarted) return [];
+
+    const player = room.players.find(p => p.id === playerId);
+    if (!player || !player.isLateJoiner) return [];
+
+    const missedCards = [];
+    for (let i = 0; i < room.currentCardIndex; i++) {
+      if (room.cardHistory[i]) {
+        missedCards.push({
+          cardIndex: i,
+          cardText: room.shuffledCards[i],
+          responses: room.cardHistory[i]
+        });
+      }
+    }
+    return missedCards;
   }
 
   async saveRoomToRedis(roomId, room) {
@@ -449,20 +724,43 @@ io.on('connection', (socket) => {
       currentRoomId = roomId;
       currentUsername = username;
 
+      // Check if this is a late joiner
+      const isLateJoiner = updatedRoom.gameStarted && updatedRoom.currentCardIndex > 0;
+      const missedCards = isLateJoiner ? roomManager.getMissedCards(roomId, socket.id) : [];
+
       socket.emit('room_joined', { 
         roomId, 
         isHost: false, 
         username,
         currentCardIndex: updatedRoom.currentCardIndex,
-        revealChoices: updatedRoom.revealChoices
+        revealChoices: updatedRoom.revealChoices,
+        isLateJoiner,
+        missedCards,
+        currentCard: isLateJoiner && updatedRoom.shuffledCards ? 
+          updatedRoom.shuffledCards[updatedRoom.currentCardIndex] : null
       });
 
       // Update all players in the room
       io.to(roomId).emit('update_room', updatedRoom);
-      io.to(roomId).emit('player_joined', { username });
+      io.to(roomId).emit('player_joined', { 
+        username, 
+        isLateJoiner,
+        missedCardsCount: missedCards.length 
+      });
     } catch (error) {
       console.error('Error joining room:', error);
       socket.emit('error', { message: error.message || 'Failed to join room' });
+    }
+  });
+
+  // Get missed cards for late joiners
+  socket.on('get_missed_cards', async (roomId) => {
+    try {
+      const missedCards = roomManager.getMissedCards(roomId, socket.id);
+      socket.emit('missed_cards', missedCards);
+    } catch (error) {
+      console.error('Error getting missed cards:', error);
+      socket.emit('error', { message: 'Failed to get missed cards' });
     }
   });
 
@@ -611,6 +909,128 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Analytics endpoints
+app.get('/analytics/visits', (req, res) => {
+  const { days = 7 } = req.query;
+  const query = `
+    SELECT 
+      DATE(timestamp) as date,
+      COUNT(DISTINCT session_id) as unique_visitors,
+      COUNT(*) as total_visits,
+      COUNT(DISTINCT ip_address) as unique_ips
+    FROM user_visits 
+    WHERE timestamp >= datetime('now', '-${days} days')
+    GROUP BY DATE(timestamp)
+    ORDER BY date DESC
+  `;
+  
+  db.all(query, (err, rows) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    res.json(rows);
+  });
+});
+
+app.get('/analytics/games', (req, res) => {
+  const { days = 7 } = req.query;
+  const query = `
+    SELECT 
+      COUNT(*) as total_games,
+      COUNT(CASE WHEN game_completed = 1 THEN 1 END) as completed_games,
+      COUNT(CASE WHEN game_started = 1 THEN 1 END) as started_games,
+      AVG(session_duration) as avg_duration,
+      AVG(cards_played) as avg_cards_played,
+      AVG(total_players) as avg_players_per_game
+    FROM game_sessions 
+    WHERE created_at >= datetime('now', '-${days} days')
+  `;
+  
+  db.get(query, (err, row) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    res.json(row);
+  });
+});
+
+app.get('/analytics/players', (req, res) => {
+  const { days = 7 } = req.query;
+  const query = `
+    SELECT 
+      COUNT(DISTINCT username) as unique_players,
+      COUNT(*) as total_participations,
+      AVG(cards_answered) as avg_cards_answered
+    FROM player_participation 
+    WHERE joined_at >= datetime('now', '-${days} days')
+  `;
+  
+  db.get(query, (err, row) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    res.json(row);
+  });
+});
+
+app.get('/analytics/responses', (req, res) => {
+  const { days = 7 } = req.query;
+  const query = `
+    SELECT 
+      choice,
+      COUNT(*) as count,
+      ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM card_responses WHERE answered_at >= datetime('now', '-${days} days')), 2) as percentage
+    FROM card_responses 
+    WHERE answered_at >= datetime('now', '-${days} days')
+    GROUP BY choice
+    ORDER BY count DESC
+  `;
+  
+  db.all(query, (err, rows) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    res.json(rows);
+  });
+});
+
+app.get('/analytics/cards', (req, res) => {
+  const { days = 7 } = req.query;
+  const query = `
+    SELECT 
+      card_text,
+      card_index,
+      COUNT(*) as times_shown,
+      COUNT(CASE WHEN choice = 'human' THEN 1 END) as human_responses,
+      COUNT(CASE WHEN choice = 'ai' THEN 1 END) as ai_responses,
+      ROUND(COUNT(CASE WHEN choice = 'human' THEN 1 END) * 100.0 / COUNT(*), 2) as human_percentage
+    FROM card_responses 
+    WHERE answered_at >= datetime('now', '-${days} days')
+    GROUP BY card_text, card_index
+    ORDER BY times_shown DESC
+  `;
+  
+  db.all(query, (err, rows) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    res.json(rows);
+  });
+});
+
+// Track page visits
+app.use((req, res, next) => {
+  if (req.path.startsWith('/analytics') || req.path.startsWith('/admin')) {
+    analytics.trackVisit(req, req.path);
+  }
+  next();
+});
+
 // Admin endpoints
 app.get('/admin', (req, res) => {
   const adminHtml = `
@@ -619,47 +1039,127 @@ app.get('/admin', (req, res) => {
     <head>
       <title>Game Admin Dashboard</title>
       <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        h1 { color: #333; }
-        .stats { display: flex; gap: 20px; margin-bottom: 20px; }
-        .stat-card { background: #f5f5f5; padding: 15px; border-radius: 5px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
-        tr:hover { background-color: #f5f5f5; }
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { color: #333; text-align: center; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .stat-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .stat-card h3 { margin: 0 0 10px 0; color: #555; }
+        .stat-value { font-size: 2em; font-weight: bold; color: #2196F3; }
+        .stat-label { color: #666; font-size: 0.9em; }
+        .tabs { display: flex; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; background: #ddd; border: none; cursor: pointer; }
+        .tab.active { background: #2196F3; color: white; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #f8f9fa; font-weight: 600; }
+        tr:hover { background-color: #f8f9fa; }
+        .chart-container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .loading { text-align: center; padding: 20px; color: #666; }
       </style>
     </head>
     <body>
-      <h1>Game Admin Dashboard</h1>
-      <div class="stats">
-        <div class="stat-card">
-          <h3>Active Rooms</h3>
-          <p id="activeRooms">Loading...</p>
+      <div class="container">
+        <h1>Game Analytics Dashboard</h1>
+        
+        <div class="stats-grid">
+          <div class="stat-card">
+            <h3>Active Rooms</h3>
+            <div class="stat-value" id="activeRooms">-</div>
+            <div class="stat-label">Currently running games</div>
+          </div>
+          <div class="stat-card">
+            <h3>Total Players</h3>
+            <div class="stat-value" id="totalPlayers">-</div>
+            <div class="stat-label">Players in active games</div>
+          </div>
+          <div class="stat-card">
+            <h3>Unique Visitors (7d)</h3>
+            <div class="stat-value" id="uniqueVisitors">-</div>
+            <div class="stat-label">Last 7 days</div>
+          </div>
+          <div class="stat-card">
+            <h3>Games Completed (7d)</h3>
+            <div class="stat-value" id="completedGames">-</div>
+            <div class="stat-label">Last 7 days</div>
+          </div>
         </div>
-        <div class="stat-card">
-          <h3>Total Players</h3>
-          <p id="totalPlayers">Loading...</p>
+
+        <div class="tabs">
+          <button class="tab active" onclick="showTab('rooms')">Active Rooms</button>
+          <button class="tab" onclick="showTab('analytics')">Analytics</button>
+          <button class="tab" onclick="showTab('responses')">Card Responses</button>
+        </div>
+
+        <div id="rooms" class="tab-content active">
+          <table>
+            <thead>
+              <tr>
+                <th>Room ID</th>
+                <th>Host</th>
+                <th>Players</th>
+                <th>Status</th>
+                <th>Current Card</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody id="roomsTableBody"></tbody>
+          </table>
+        </div>
+
+        <div id="analytics" class="tab-content">
+          <div class="chart-container">
+            <h3>Visitor Trends (Last 7 Days)</h3>
+            <div id="visitorChart" class="loading">Loading...</div>
+          </div>
+          <div class="chart-container">
+            <h3>Game Statistics</h3>
+            <div id="gameStats" class="loading">Loading...</div>
+          </div>
+        </div>
+
+        <div id="responses" class="tab-content">
+          <div class="chart-container">
+            <h3>Response Distribution</h3>
+            <div id="responseChart" class="loading">Loading...</div>
+          </div>
+          <div class="chart-container">
+            <h3>Most Discussed Cards</h3>
+            <div id="cardStats" class="loading">Loading...</div>
+          </div>
         </div>
       </div>
-      <table id="roomsTable">
-        <tr>
-          <th>Room ID</th>
-          <th>Host</th>
-          <th>Players</th>
-          <th>Status</th>
-          <th>Created</th>
-        </tr>
-        <tbody id="tableBody"></tbody>
-      </table>
 
       <script>
+        function showTab(tabName) {
+          // Hide all tab contents
+          document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.remove('active');
+          });
+          
+          // Remove active class from all tabs
+          document.querySelectorAll('.tab').forEach(tab => {
+            tab.classList.remove('active');
+          });
+          
+          // Show selected tab content
+          document.getElementById(tabName).classList.add('active');
+          
+          // Add active class to clicked tab
+          event.target.classList.add('active');
+        }
+
         function updateStats() {
+          // Update basic stats
           fetch('/admin/stats')
             .then(response => response.json())
             .then(data => {
               document.getElementById('activeRooms').textContent = data.activeRooms;
               document.getElementById('totalPlayers').textContent = data.totalPlayers;
               
-              const tableBody = document.getElementById('tableBody');
+              const tableBody = document.getElementById('roomsTableBody');
               tableBody.innerHTML = '';
               
               data.rooms.forEach(room => {
@@ -669,16 +1169,113 @@ app.get('/admin', (req, res) => {
                   <td>\${room.players.find(p => p.id === room.host)?.username || 'Unknown'}</td>
                   <td>\${room.players.length}</td>
                   <td>\${room.status}</td>
+                  <td>\${room.currentCardIndex + 1}/\${room.shuffledCards?.length || '?'}</td>
                   <td>\${new Date(room.createdAt).toLocaleString()}</td>
                 \`;
                 tableBody.appendChild(row);
               });
             })
             .catch(error => console.error('Error fetching stats:', error));
+
+          // Update analytics
+          fetch('/analytics/visits')
+            .then(response => response.json())
+            .then(data => {
+              const totalVisitors = data.reduce((sum, day) => sum + day.unique_visitors, 0);
+              document.getElementById('uniqueVisitors').textContent = totalVisitors;
+            })
+            .catch(error => console.error('Error fetching visits:', error));
+
+          fetch('/analytics/games')
+            .then(response => response.json())
+            .then(data => {
+              document.getElementById('completedGames').textContent = data.completed_games || 0;
+            })
+            .catch(error => console.error('Error fetching games:', error));
+        }
+
+        function loadAnalytics() {
+          // Load visitor trends
+          fetch('/analytics/visits')
+            .then(response => response.json())
+            .then(data => {
+              const chartDiv = document.getElementById('visitorChart');
+              chartDiv.innerHTML = \`
+                <table>
+                  <tr><th>Date</th><th>Unique Visitors</th><th>Total Visits</th></tr>
+                  \${data.map(day => \`
+                    <tr><td>\${day.date}</td><td>\${day.unique_visitors}</td><td>\${day.total_visits}</td></tr>
+                  \`).join('')}
+                </table>
+              \`;
+            })
+            .catch(error => console.error('Error loading visitor data:', error));
+
+          // Load game stats
+          fetch('/analytics/games')
+            .then(response => response.json())
+            .then(data => {
+              const statsDiv = document.getElementById('gameStats');
+              statsDiv.innerHTML = \`
+                <table>
+                  <tr><td>Total Games</td><td>\${data.total_games || 0}</td></tr>
+                  <tr><td>Completed Games</td><td>\${data.completed_games || 0}</td></tr>
+                  <tr><td>Started Games</td><td>\${data.started_games || 0}</td></tr>
+                  <tr><td>Avg Duration</td><td>\${Math.round((data.avg_duration || 0) / 1000 / 60)} min</td></tr>
+                  <tr><td>Avg Cards Played</td><td>\${Math.round(data.avg_cards_played || 0)}</td></tr>
+                  <tr><td>Avg Players per Game</td><td>\${Math.round(data.avg_players_per_game || 0)}</td></tr>
+                </table>
+              \`;
+            })
+            .catch(error => console.error('Error loading game stats:', error));
+        }
+
+        function loadResponses() {
+          // Load response distribution
+          fetch('/analytics/responses')
+            .then(response => response.json())
+            .then(data => {
+              const chartDiv = document.getElementById('responseChart');
+              chartDiv.innerHTML = \`
+                <table>
+                  <tr><th>Choice</th><th>Count</th><th>Percentage</th></tr>
+                  \${data.map(item => \`
+                    <tr><td>\${item.choice}</td><td>\${item.count}</td><td>\${item.percentage}%</td></tr>
+                  \`).join('')}
+                </table>
+              \`;
+            })
+            .catch(error => console.error('Error loading response data:', error));
+
+          // Load card stats
+          fetch('/analytics/cards')
+            .then(response => response.json())
+            .then(data => {
+              const chartDiv = document.getElementById('cardStats');
+              chartDiv.innerHTML = \`
+                <table>
+                  <tr><th>Card</th><th>Times Shown</th><th>Human %</th><th>AI %</th></tr>
+                  \${data.slice(0, 10).map(card => \`
+                    <tr>
+                      <td>\${card.card_text.substring(0, 50)}...</td>
+                      <td>\${card.times_shown}</td>
+                      <td>\${card.human_percentage}%</td>
+                      <td>\${100 - card.human_percentage}%</td>
+                    </tr>
+                  \`).join('')}
+                </table>
+              \`;
+            })
+            .catch(error => console.error('Error loading card data:', error));
         }
         
+        // Initial load
         updateStats();
-        setInterval(updateStats, 5000);
+        loadAnalytics();
+        loadResponses();
+        
+        // Update every 30 seconds
+        setInterval(updateStats, 30000);
       </script>
     </body>
     </html>

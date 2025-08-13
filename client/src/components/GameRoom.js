@@ -17,6 +17,9 @@ function GameRoom({ socket, roomData, setRoomData }) {
   const [gameOver, setGameOver] = useState(false);
   const [error, setError] = useState(null);
   const [isReconnecting, setIsReconnecting] = useState(false);
+  const [isLateJoiner, setIsLateJoiner] = useState(false);
+  const [missedCards, setMissedCards] = useState([]);
+  const [showMissedCards, setShowMissedCards] = useState(false);
   
   console.log("Initial roomData:", roomData);
   console.log("Initial room state:", room);
@@ -98,6 +101,14 @@ function GameRoom({ socket, roomData, setRoomData }) {
     const handlePlayerLeft = (data) => {
       console.log(`${data.username} left the game`);
     };
+
+    // Handle player joined
+    const handlePlayerJoined = (data) => {
+      console.log(`${data.username} joined the game`);
+      if (data.isLateJoiner) {
+        console.log(`${data.username} joined late and missed ${data.missedCardsCount} cards`);
+      }
+    };
     
     // Handle new host
     const handleNewHost = (data) => {
@@ -132,6 +143,15 @@ function GameRoom({ socket, roomData, setRoomData }) {
       console.log(`${data.username} reconnected`);
     };
 
+    // Handle missed cards for late joiners
+    const handleMissedCards = (cards) => {
+      console.log('Received missed cards:', cards);
+      setMissedCards(cards);
+      if (cards.length > 0) {
+        setShowMissedCards(true);
+      }
+    };
+
     // Handle errors
     const handleError = (errorData) => {
       console.error('Socket error:', errorData);
@@ -146,9 +166,11 @@ function GameRoom({ socket, roomData, setRoomData }) {
     socket.on('new_card', handleNewCard);
     socket.on('game_over', handleGameOver);
     socket.on('player_left', handlePlayerLeft);
+    socket.on('player_joined', handlePlayerJoined);
     socket.on('new_host', handleNewHost);
     socket.on('reconnected', handleReconnected);
     socket.on('player_reconnected', handlePlayerReconnected);
+    socket.on('missed_cards', handleMissedCards);
     socket.on('error', handleError);
 
     // Handle socket disconnection
@@ -177,14 +199,28 @@ function GameRoom({ socket, roomData, setRoomData }) {
       socket.off('new_card', handleNewCard);
       socket.off('game_over', handleGameOver);
       socket.off('player_left', handlePlayerLeft);
+      socket.off('player_joined', handlePlayerJoined);
       socket.off('new_host', handleNewHost);
       socket.off('reconnected', handleReconnected);
       socket.off('player_reconnected', handlePlayerReconnected);
+      socket.off('missed_cards', handleMissedCards);
       socket.off('error', handleError);
       socket.off('disconnect', handleDisconnect);
       socket.off('reconnect', handleReconnect);
     };
   }, [socket, roomData, setRoomData, roomId]);
+
+  // Check if current user is a late joiner
+  useEffect(() => {
+    if (room && room.players) {
+      const currentPlayer = room.players.find(p => p.id === socket.id);
+      if (currentPlayer && currentPlayer.isLateJoiner) {
+        setIsLateJoiner(true);
+        // Request missed cards
+        socket.emit('get_missed_cards', roomId);
+      }
+    }
+  }, [room, socket, roomId]);
   
   const startGame = () => {
     setError(null);
@@ -200,32 +236,21 @@ function GameRoom({ socket, roomData, setRoomData }) {
     setError(null);
     socket.emit('next_card', roomId);
   };
-  
-  const handleCardDrop = (column) => {
+
+  const submitChoice = (choice) => {
     setError(null);
-    setPlayerChoice(column);
-    socket.emit('submit_choice', { roomId, choice: column });
-    
-    if (revealChoices) {
-      socket.emit('update_choice', { roomId, choice: column });
-    }
-  };
-  
-  const leaveRoom = () => {
-    setRoomData(null);
-    navigate('/');
-  };
-  
-  const copyRoomCode = () => {
-    navigator.clipboard.writeText(roomId);
-    alert('Room code copied to clipboard!');
+    socket.emit('submit_choice', { roomId, choice });
   };
 
-  const retryConnection = () => {
+  const updateChoice = (choice) => {
     setError(null);
-    socket.emit('get_room_data', roomId);
+    socket.emit('update_choice', { roomId, choice });
   };
-  
+
+  const closeMissedCards = () => {
+    setShowMissedCards(false);
+  };
+
   if (isReconnecting) {
     return (
       <div className="game-room">
@@ -241,111 +266,111 @@ function GameRoom({ socket, roomData, setRoomData }) {
     return (
       <div className="game-room">
         <div className="loading">
-          <h2>Loading game room...</h2>
-          {error && (
-            <div className="error-container">
-              <p className="error-message">{error}</p>
-              <button onClick={retryConnection} className="retry-btn">Retry</button>
-            </div>
-          )}
+          <h2>Loading room...</h2>
         </div>
       </div>
     );
   }
-  
+
   return (
     <div className="game-room">
+      {error && (
+        <div className="error-message">
+          <p>{error}</p>
+        </div>
+      )}
+
+      {isLateJoiner && (
+        <div className="late-joiner-notice">
+          <p>You joined this game late! You missed some previous cards.</p>
+          <button onClick={() => setShowMissedCards(true)}>
+            View Missed Cards ({missedCards.length})
+          </button>
+        </div>
+      )}
+
+      {showMissedCards && (
+        <div className="missed-cards-modal">
+          <div className="missed-cards-content">
+            <h3>Cards You Missed</h3>
+            <div className="missed-cards-list">
+              {missedCards.map((card, index) => (
+                <div key={index} className="missed-card">
+                  <h4>Card {card.cardIndex + 1}</h4>
+                  <p>{card.cardText}</p>
+                  <div className="responses">
+                    <h5>Group Responses:</h5>
+                    <div className="response-summary">
+                      {Object.entries(card.responses).map(([playerId, choice]) => {
+                        const player = room.players.find(p => p.id === playerId);
+                        return (
+                          <span key={playerId} className={`response ${choice}`}>
+                            {player?.username || 'Unknown'}: {choice}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button onClick={closeMissedCards} className="close-button">
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="game-header">
-        <h1>Human Connection Card Game</h1>
+        <h2>Room: {roomId}</h2>
         <div className="room-info">
-          <p>Room Code: <span className="room-code">{roomId}</span></p>
-          <button onClick={copyRoomCode} className="copy-btn">Copy Code</button>
-          <button onClick={leaveRoom} className="leave-btn">Leave Game</button>
+          <span>Players: {room.players.length}/{room.maxPlayers}</span>
+          {gameStarted && (
+            <span>Card: {room.currentCardIndex + 1}/{room.shuffledCards?.length || '?'}</span>
+          )}
         </div>
       </div>
 
-      {error && (
-        <div className="error-banner">
-          <p>{error}</p>
-          <button onClick={() => setError(null)} className="dismiss-btn">×</button>
-        </div>
-      )}
-      
       <div className="game-content">
-        <div className="sidebar">
+        <div className="left-panel">
           <PlayerList 
             players={room.players} 
+            hostId={room.host}
+            currentPlayerId={socket.id}
             playerChoices={room.playerChoices}
             revealChoices={revealChoices}
-            currentUserId={socket.id}
           />
-          
-          {roomData.isHost && (
-            <div className="host-controls">
-              <h3>Host Controls</h3>
-              
-              {!gameStarted && (
-                <button 
-                  onClick={startGame} 
-                  className="start-btn"
-                  disabled={room.players.length < 1}
-                >
+        </div>
+
+        <div className="center-panel">
+          {!gameStarted ? (
+            <div className="waiting-room">
+              <h3>Waiting for players...</h3>
+              <p>Share this room code with others: <strong>{roomId}</strong></p>
+              {roomData?.isHost && room.players.length >= 1 && (
+                <button onClick={startGame} className="start-button">
                   Start Game
                 </button>
               )}
-              
-              {gameStarted && !revealChoices && (
-                <button 
-                  onClick={revealAllChoices} 
-                  className="reveal-btn"
-                >
-                  Reveal Choices
-                </button>
-              )}
-              
-              {gameStarted && revealChoices && (
-                <button 
-                  onClick={nextCard} 
-                  className="next-btn"
-                >
-                  Next Card
-                </button>
-              )}
             </div>
-          )}
-        </div>
-        
-        <div className="main-board">
-          {!gameStarted && (
-            <div className="waiting-room">
-              <h2>Waiting for the host to start the game...</h2>
-              <p>Current players: {room.players.length}</p>
-              {room.players.length === 0 && (
-                <p className="warning">No players in room. Please invite others to join.</p>
-              )}
+          ) : gameOver ? (
+            <div className="game-over">
+              <h3>Game Over!</h3>
+              <p>Thanks for playing!</p>
             </div>
-          )}
-          
-          {gameStarted && !gameOver && (
-            <CardBoard 
-              card={currentCard}
-              playerChoice={playerChoice}
-              onCardDrop={handleCardDrop}
+          ) : (
+            <CardBoard
+              currentCard={currentCard}
               revealChoices={revealChoices}
+              playerChoice={playerChoice}
               playerChoices={room.playerChoices}
               players={room.players}
+              isHost={roomData?.isHost}
+              onSubmitChoice={submitChoice}
+              onUpdateChoice={updateChoice}
+              onRevealChoices={revealAllChoices}
+              onNextCard={nextCard}
             />
-          )}
-          
-          {gameOver && (
-            <div className="game-over">
-              <h2>Game Over!</h2>
-              {roomData.isHost && (
-                <button onClick={startGame} className="restart-btn">
-                  Play Again
-                </button>
-              )}
-            </div>
           )}
         </div>
       </div>
