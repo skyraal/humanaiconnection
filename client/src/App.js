@@ -1,74 +1,71 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import io from 'socket.io-client';
 import Home from './components/Home';
 import GameRoom from './components/GameRoom';
 import './App.css';
 
-// Determine the correct backend URL
-const getBackendUrl = () => {
+// Determine server URL based on environment
+const getServerUrl = () => {
   // Check for environment variable first
-  if (process.env.REACT_APP_BACKEND_URL) {
-    return process.env.REACT_APP_BACKEND_URL;
+  if (process.env.REACT_APP_SERVER_URL) {
+    return process.env.REACT_APP_SERVER_URL;
   }
   
   // Check if we're in production
   if (process.env.NODE_ENV === 'production') {
-    // Use the correct production backend URL
-    return 'https://humanaiconnection.onrender.com';
+    // Default production URL (will be overridden by environment variable)
+    return 'https://humanaiconnection-backend.onrender.com';
   }
   
   // Development URL
   return 'http://localhost:3001';
 };
 
-const socket = io.connect(getBackendUrl());
+// Initialize socket connection
+const socket = io(getServerUrl(), {
+  transports: ['websocket', 'polling'],
+  upgrade: true,
+  rememberUpgrade: true,
+  timeout: 20000,
+  forceNew: true
+});
 
 function App() {
-  // Renamed to isConnected to avoid eslint warning
-  const [isConnected, setIsConnected] = useState(false); 
   const [roomData, setRoomData] = useState(null);
-  
+
   useEffect(() => {
+    // Socket connection event handlers
     socket.on('connect', () => {
-      setIsConnected(true);
-      console.log('Connected to server:', getBackendUrl());
+      console.log('Connected to server:', getServerUrl());
     });
-    
-    socket.on('disconnect', () => {
-      setIsConnected(false);
-      console.log('Disconnected from server');
+
+    socket.on('connect_error', (error) => {
+      console.error('Connection error:', error);
     });
-    
-    socket.on('error', (error) => {
-      alert(error.message);
+
+    socket.on('disconnect', (reason) => {
+      console.log('Disconnected:', reason);
     });
-    
+
     return () => {
       socket.off('connect');
+      socket.off('connect_error');
       socket.off('disconnect');
-      socket.off('error');
     };
   }, []);
-  
+
   return (
     <Router>
-      <div className="app">
+      <div className="App">
         <Routes>
-          <Route path="/" element={<Home socket={socket} setRoomData={setRoomData} />} />
+          <Route 
+            path="/" 
+            element={<Home socket={socket} setRoomData={setRoomData} />} 
+          />
           <Route 
             path="/room/:roomId" 
-            element={
-              roomData ? (
-                <GameRoom 
-                  socket={socket} 
-                  roomData={roomData} 
-                  setRoomData={setRoomData} 
-                />
-              ) : (
-                <Navigate to="/" />
-              )
-            } 
+            element={<GameRoom socket={socket} roomData={roomData} setRoomData={setRoomData} />} 
           />
         </Routes>
       </div>

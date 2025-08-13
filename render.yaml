@@ -1,7 +1,7 @@
 services:
   # Backend API Service
   - type: web
-    name: humanaiconnection
+    name: humanaiconnection-backend
     env: node
     plan: free
     buildCommand: cd server && npm install
@@ -22,5 +22,12 @@ services:
     buildCommand: cd client && npm install && npm run build
     staticPublishPath: client/build
     envVars:
-      - key: REACT_APP_BACKEND_URL
-        value: https://humanaiconnection.onrender.com 
+      - key: REACT_APP_SERVER_URL
+        value: https://humanaiconnection-backend.onrender.com
+
+databases:
+  # PostgreSQL Database (Optional - for analytics)
+  - name: humanaiconnection-db
+    databaseName: humanaiconnection
+    user: humanaiconnection_user
+    plan: free 
