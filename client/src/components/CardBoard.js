@@ -95,25 +95,27 @@ function CardBoard({ card, playerChoice, onCardDrop, revealChoices, playerChoice
         </div>
       </div>
       
-      {/* Choice Counter */}
-      <div className="choice-counter">
-        <div className="counter-item">
-          <span className="counter-label">Support:</span>
-          <span className="counter-value">{choiceCounts.support}</span>
+      {/* Choice Counter - Only show when choices are revealed */}
+      {revealChoices && (
+        <div className="choice-counter">
+          <div className="counter-item">
+            <span className="counter-label">Support:</span>
+            <span className="counter-value">{choiceCounts.support}</span>
+          </div>
+          <div className="counter-item">
+            <span className="counter-label">It Depends:</span>
+            <span className="counter-value">{choiceCounts.depends}</span>
+          </div>
+          <div className="counter-item">
+            <span className="counter-label">Erode:</span>
+            <span className="counter-value">{choiceCounts.erode}</span>
+          </div>
+          <div className="counter-total">
+            <span className="total-label">Total:</span>
+            <span className="total-value">{totalChoices}</span>
+          </div>
         </div>
-        <div className="counter-item">
-          <span className="counter-label">It Depends:</span>
-          <span className="counter-value">{choiceCounts.depends}</span>
-        </div>
-        <div className="counter-item">
-          <span className="counter-label">Erode:</span>
-          <span className="counter-value">{choiceCounts.erode}</span>
-        </div>
-        <div className="counter-total">
-          <span className="total-label">Total:</span>
-          <span className="total-value">{totalChoices}</span>
-        </div>
-      </div>
+      )}
       
       <div className="columns-container">
         <div 
