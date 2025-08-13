@@ -18,6 +18,72 @@ body {
   flex-direction: column;
 }
 
+/* Connection Error Overlay */
+.connection-error-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.8);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
+
+.connection-error-content {
+  background-color: white;
+  padding: 40px;
+  border-radius: 12px;
+  text-align: center;
+  max-width: 400px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+.connection-error-content h2 {
+  color: #d32f2f;
+  margin-bottom: 15px;
+  font-size: 24px;
+}
+
+.connection-error-content p {
+  color: #666;
+  margin-bottom: 25px;
+  line-height: 1.5;
+}
+
+.retry-connection-btn, .refresh-btn {
+  margin: 0 10px;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.retry-connection-btn {
+  background: linear-gradient(135deg, #4db6ac 0%, #26a69a 100%);
+  color: white;
+}
+
+.retry-connection-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(77, 182, 172, 0.3);
+}
+
+.refresh-btn {
+  background: linear-gradient(135deg, #ff8a80 0%, #ff5252 100%);
+  color: white;
+}
+
+.refresh-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(255, 82, 82, 0.3);
+}
+
 button {
   cursor: pointer;
   border: none;
@@ -78,4 +144,18 @@ input:focus {
   background-clip: text;
   -webkit-text-fill-color: transparent;
   font-weight: 700;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .connection-error-content {
+    margin: 20px;
+    padding: 30px 20px;
+  }
+  
+  .retry-connection-btn, .refresh-btn {
+    display: block;
+    width: 100%;
+    margin: 10px 0;
+  }
 }

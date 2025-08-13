@@ -15,6 +15,10 @@ function GameRoom({ socket, roomData, setRoomData }) {
   const [playerChoice, setPlayerChoice] = useState(null);
   const [gameStarted, setGameStarted] = useState(false);
   const [gameOver, setGameOver] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [isLateJoiner, setIsLateJoiner] = useState(false);
+  const [showLateJoinerMessage, setShowLateJoinerMessage] = useState(false);
   
   console.log("Initial roomData:", roomData);
   console.log("Initial room state:", room);
@@ -24,74 +28,155 @@ function GameRoom({ socket, roomData, setRoomData }) {
     console.log('Requesting room data for:', roomId);
     socket.emit('get_room_data', roomId);
 
-    socket.on('update_room', (updatedRoom) => {
+    // Set up socket event listeners
+    const handleRoomUpdate = (updatedRoom) => {
       console.log('Received room update:', updatedRoom);
       setRoom(updatedRoom);
-    });
-    
-    socket.on('game_started', (data) => {
+      setIsLoading(false);
+    };
+
+    const handleGameStarted = (data) => {
+      console.log('Game started:', data);
       setCurrentCard(data.card);
       setGameStarted(true);
       setRevealChoices(false);
       setPlayerChoice(null);
-    });
-    
-    socket.on('choices_revealed', () => {
+      setIsLoading(false);
+    };
+
+    const handleGameStateSync = (data) => {
+      console.log('Game state sync:', data);
+      setGameStarted(data.gameStarted);
+      setCurrentCard(data.currentCard);
+      setRevealChoices(data.revealChoices);
+      setIsLoading(false);
+      
+      // If this is a late joiner, show a welcome message
+      if (data.isLateJoiner) {
+        console.log('Late joiner detected - showing current game state');
+        setIsLateJoiner(true);
+        setShowLateJoinerMessage(true);
+        // Hide the message after 5 seconds
+        setTimeout(() => setShowLateJoinerMessage(false), 5000);
+      }
+    };
+
+    const handleChoicesRevealed = () => {
+      console.log('Choices revealed');
       setRevealChoices(true);
-    });
-    
-    socket.on('new_card', (data) => {
+    };
+
+    const handleNewCard = (data) => {
+      console.log('New card:', data);
       setCurrentCard(data.card);
       setRevealChoices(false);
       setPlayerChoice(null);
-    });
-    
-    socket.on('game_over', () => {
+    };
+
+    const handleGameOver = () => {
+      console.log('Game over');
       setGameOver(true);
-    });
-    
-    socket.on('player_left', (data) => {
+    };
+
+    const handlePlayerLeft = (data) => {
       console.log(`${data.username} left the game`);
-    });
-    
-    socket.on('new_host', (data) => {
+    };
+
+    const handleNewHost = (data) => {
+      console.log('New host:', data);
       if (data.hostId === socket.id) {
         setRoomData({
           ...roomData,
           isHost: true
         });
       }
-    });
-    
-    return () => {
-      socket.off('update_room');
-      socket.off('game_started');
-      socket.off('choices_revealed');
-      socket.off('new_card');
-      socket.off('game_over');
-      socket.off('player_left');
-      socket.off('new_host');
     };
-  }, [socket, roomData, setRoomData]);
+
+    const handleError = (error) => {
+      console.error('Socket error:', error);
+      setError(error.message);
+      setIsLoading(false);
+    };
+
+    const handleRoomJoined = (data) => {
+      console.log('Room joined data:', data);
+      if (data.isLateJoiner) {
+        console.log('Late joiner joined - game already in progress');
+        setGameStarted(true);
+        setCurrentCard(data.currentCard);
+        setRevealChoices(data.revealChoices);
+        setIsLateJoiner(true);
+        setShowLateJoinerMessage(true);
+        // Hide the message after 5 seconds
+        setTimeout(() => setShowLateJoinerMessage(false), 5000);
+      }
+    };
+
+    // Add event listeners
+    socket.on('update_room', handleRoomUpdate);
+    socket.on('game_started', handleGameStarted);
+    socket.on('game_state_sync', handleGameStateSync);
+    socket.on('choices_revealed', handleChoicesRevealed);
+    socket.on('new_card', handleNewCard);
+    socket.on('game_over', handleGameOver);
+    socket.on('player_left', handlePlayerLeft);
+    socket.on('new_host', handleNewHost);
+    socket.on('error', handleError);
+    socket.on('room_joined', handleRoomJoined);
+    
+    // Cleanup function
+    return () => {
+      socket.off('update_room', handleRoomUpdate);
+      socket.off('game_started', handleGameStarted);
+      socket.off('game_state_sync', handleGameStateSync);
+      socket.off('choices_revealed', handleChoicesRevealed);
+      socket.off('new_card', handleNewCard);
+      socket.off('game_over', handleGameOver);
+      socket.off('player_left', handlePlayerLeft);
+      socket.off('new_host', handleNewHost);
+      socket.off('error', handleError);
+      socket.off('room_joined', handleRoomJoined);
+    };
+  }, [socket, roomData, setRoomData, roomId]);
   
   const startGame = () => {
-    socket.emit('start_game', roomId);
+    try {
+      socket.emit('start_game', roomId);
+    } catch (error) {
+      console.error('Error starting game:', error);
+      setError('Failed to start game');
+    }
   };
   
   const revealAllChoices = () => {
-    socket.emit('reveal_choices', roomId);
+    try {
+      socket.emit('reveal_choices', roomId);
+    } catch (error) {
+      console.error('Error revealing choices:', error);
+      setError('Failed to reveal choices');
+    }
   };
   
   const nextCard = () => {
-    socket.emit('next_card', roomId);
+    try {
+      socket.emit('next_card', roomId);
+    } catch (error) {
+      console.error('Error moving to next card:', error);
+      setError('Failed to move to next card');
+    }
   };
   
   const handleCardDrop = (column) => {
-    setPlayerChoice(column);
-    socket.emit('submit_choice', { roomId, choice: column });
-    
-    if (revealChoices) {
-      socket.emit('update_choice', { roomId, choice: column });
+    try {
+      setPlayerChoice(column);
+      socket.emit('submit_choice', { roomId, choice: column });
+      
+      if (revealChoices) {
+        socket.emit('update_choice', { roomId, choice: column });
+      }
+    } catch (error) {
+      console.error('Error submitting choice:', error);
+      setError('Failed to submit choice');
     }
   };
   
@@ -104,9 +189,46 @@ function GameRoom({ socket, roomData, setRoomData }) {
     navigator.clipboard.writeText(roomId);
     alert('Room code copied to clipboard!');
   };
+
+  const retryConnection = () => {
+    setError(null);
+    setIsLoading(true);
+    socket.emit('get_room_data', roomId);
+  };
+  
+  // Show loading state
+  if (isLoading) {
+    return (
+      <div className="loading">
+        <div className="loading-spinner"></div>
+        <p>Connecting to game...</p>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="error-container">
+        <h2>Connection Error</h2>
+        <p>{error}</p>
+        <button onClick={retryConnection} className="retry-btn">
+          Retry Connection
+        </button>
+        <button onClick={leaveRoom} className="leave-btn">
+          Return to Home
+        </button>
+      </div>
+    );
+  }
   
   if (!room) {
-    return <div className="loading">Waiting for host to start the game....</div>;
+    return (
+      <div className="loading">
+        <div className="loading-spinner"></div>
+        <p>Waiting for room data...</p>
+      </div>
+    );
   }
   
   return (
@@ -121,6 +243,12 @@ function GameRoom({ socket, roomData, setRoomData }) {
       </div>
       
       <div className="game-content">
+        {showLateJoinerMessage && (
+          <div className="late-joiner-message">
+            <p>Welcome! You've joined a game in progress. You can participate in the current card discussion.</p>
+          </div>
+        )}
+        
         <div className="sidebar">
           <PlayerList 
             players={room.players} 
@@ -169,6 +297,9 @@ function GameRoom({ socket, roomData, setRoomData }) {
             <div className="waiting-room">
               <h2>Waiting for the host to start the game...</h2>
               <p>Current players: {room.players.length}</p>
+              {room.players.length === 0 && (
+                <p className="no-players">No players have joined yet</p>
+              )}
             </div>
           )}
           

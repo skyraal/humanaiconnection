@@ -11,26 +11,34 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
-      ? ['https://humanaiconnectiongame.onrender.com'] 
+      ? ['https://humanaiconnection.onrender.com', 'https://humanaiconnectiongame.onrender.com'] 
       : '*',
-    methods: ['GET', 'POST']
-  }
+    methods: ['GET', 'POST'],
+    credentials: true
+  },
+  // Add connection pooling and rate limiting
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  maxHttpBufferSize: 1e8
 });
 
-// Game state
-const rooms = {};
+// Game state with improved structure
+const rooms = new Map();
+const socketToRoom = new Map(); // Track which room each socket is in
 const cards = [
   "Preparing to have a tough conversation by practicing it first with an AI bot.",
   "Checking in with your AI girlfriend/boyfriend throughout the day.",
   "Generating AI bedtime stories for a younger sibling, using personal information about your family to customize them.",
   "Creating a holographic version of yourself to attend a far-away family gathering.",
-  "Using a friend’s photo to create a deep fake video as a joke.",
-  "Letting AI auto-reply to your friends’ messages when you’re feeling overwhelmed.",
+  "Using a friend's photo to create a deep fake video as a joke.",
+  "Letting AI auto-reply to your friends' messages when you're feeling overwhelmed.",
   "Using video calls to stay connected with long-distance family members.",
   "Checking your partner's phone without their knowledge.",
   "Playing online multiplayer games with friends during a pandemic.",
   "Using AI to write personalized messages to loved ones.",
-  "Tasking AI with tracking special moments in your friends’ lives and sending personalized messages and gifts", "Engage in AI-simulations that help you see the world/ scenarios from someone else’s perspective", "Participating in a virtual AI-facilitated group therapy session", "Using a tool to ‘optimize’ your social media pictures", "Venting frustrations to an AI bot", "Create a memory bank that you and your friends share and can ‘look into’ for years to come", "Using AI that tracks your emotions and translates them into visual art that others can see (like a public ‘mood ring’)", "Letting an AI summarize your friend’s texts when you don’t feel like reading long messages", "Asking an AI chatbot for advice on dealing with feelings of loneliness", "Asking AI to write a heartfelt speech for a friend’s special occasion", "Talking to an AI preserved version of a beloved deceased relative or ancestor", "Generating an AI-created message to apologize to a friend after a fight", "Using AI to translate a message for someone who speaks another language", "Making AI version of your favorite movie/book/tv character to chat with when you are bored", "Having an AI version of you sign on to class", "Using AI to analyze all of your personal data (emails, texts, search history), to recommend romantic partners", "Using a hidden AI companion in your ear to prompt you with topics, questions, and responses while you’re in conversation with someone", "Using AI to rate your physical appearance and offer tips to improve it"
+  "Tasking AI with tracking special moments in your friends' lives and sending personalized messages and gifts", "Engage in AI-simulations that help you see the world/ scenarios from someone else's perspective", "Participating in a virtual AI-facilitated group therapy session", "Using a tool to 'optimize' your social media pictures", "Venting frustrations to an AI bot", "Create a memory bank that you and your friends share and can 'look into' for years to come", "Using AI that tracks your emotions and translates them into visual art that others can see (like a public 'mood ring')", "Letting an AI summarize your friend's texts when you don't feel like reading long messages", "Asking an AI chatbot for advice on dealing with feelings of loneliness", "Asking AI to write a heartfelt speech for a friend's special occasion", "Talking to an AI preserved version of a beloved deceased relative or ancestor", "Generating an AI-created message to apologize to a friend after a fight", "Using AI to translate a message for someone who speaks another language", "Making AI version of your favorite movie/book/tv character to chat with when you are bored", "Having an AI version of you sign on to class", "Using AI to analyze all of your personal data (emails, texts, search history), to recommend romantic partners", "Using a hidden AI companion in your ear to prompt you with topics, questions, and responses while you're in conversation with someone", "Using AI to rate your physical appearance and offer tips to improve it"
 ];
 
 // Fisher-Yates shuffle algorithm to randomize card order
@@ -43,6 +51,53 @@ function shuffleCards(array) {
   return shuffled;
 }
 
+// Utility functions
+function generateRoomId() {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+function getCurrentCard(room) {
+  if (!room.gameStarted || !room.shuffledCards || room.currentCardIndex >= room.shuffledCards.length) {
+    return null;
+  }
+  return room.shuffledCards[room.currentCardIndex];
+}
+
+function broadcastRoomUpdate(roomId, room) {
+  io.to(roomId).emit('update_room', room);
+}
+
+function removePlayerFromRoom(socketId, roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return null;
+
+  const playerIndex = room.players.findIndex(p => p.id === socketId);
+  if (playerIndex === -1) return null;
+
+  const player = room.players[playerIndex];
+  room.players.splice(playerIndex, 1);
+  
+  // Clean up player choices
+  if (room.playerChoices[socketId]) {
+    delete room.playerChoices[socketId];
+  }
+
+  // Handle host transfer
+  if (room.host === socketId) {
+    if (room.players.length > 0) {
+      room.host = room.players[0].id;
+      io.to(roomId).emit('new_host', { hostId: room.host });
+    } else {
+      // Room is empty, delete it
+      rooms.delete(roomId);
+      return null;
+    }
+  }
+
+  socketToRoom.delete(socketId);
+  return player;
+}
+
 // Store game results
 const fs = require('fs');
 const path = require('path');
@@ -50,12 +105,12 @@ const path = require('path');
 function saveGameResults(roomId, isFinal = false) {
   console.log(`Saving results for room: ${roomId}, isFinal: ${isFinal}`);
   
-  if (!rooms[roomId]) {
+  const room = rooms.get(roomId);
+  if (!room) {
     console.log(`Room ${roomId} not found. Cannot save results.`);
-    return;
+    return null;
   }
   
-  const room = rooms[roomId];
   const gameData = {
     roomId,
     timestamp: new Date().toISOString(),
@@ -118,129 +173,289 @@ function saveGameResults(roomId, isFinal = false) {
   }
 }
 
-// Socket connection handler
+// Socket connection handler with improved error handling and concurrency
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
   // Create a new game room
   socket.on('create_room', (username) => {
-    const roomId = generateRoomId();
-    
-    rooms[roomId] = {
-      host: socket.id,
-      players: [{id: socket.id, username, ready: false}],
-      currentCardIndex: 0,
-      revealChoices: false,
-      playerChoices: {},
-      cardHistory: {}, // Store choices for all cards to save in JSON
-      gameStarted: false,
-      shuffledCards: [] // Will store shuffled cards when game starts
-    };
-    
-    socket.join(roomId);
-    // First emit room_created with complete room data
-    socket.emit('room_created', { 
-      roomId, 
-      isHost: true, 
-      username,
-      room: rooms[roomId] // Include the entire room object
-    });
-    
-    console.log(`Room created: ${roomId} by ${username}`);
-  });
+    try {
+      if (!username || typeof username !== 'string' || username.trim().length === 0) {
+        socket.emit('error', { message: 'Invalid username' });
+        return;
+      }
 
-  // Join an existing room
-  socket.on('join_room', ({ roomId, username }) => {
-    if (rooms[roomId]) {
+      let roomId = generateRoomId();
+      
+      // Ensure unique room ID
+      while (rooms.has(roomId)) {
+        roomId = generateRoomId();
+      }
+      
+      const room = {
+        host: socket.id,
+        players: [{id: socket.id, username: username.trim(), ready: false}],
+        currentCardIndex: 0,
+        revealChoices: false,
+        playerChoices: {},
+        cardHistory: {},
+        gameStarted: false,
+        shuffledCards: [],
+        createdAt: Date.now(),
+        lastActivity: Date.now()
+      };
+      
+      rooms.set(roomId, room);
+      socketToRoom.set(socket.id, roomId);
       socket.join(roomId);
       
-      // Add player to the room
-      rooms[roomId].players.push({id: socket.id, username, ready: false});
-      rooms[roomId].playerChoices[socket.id] = null;
-      
-      socket.emit('room_joined', { 
+      socket.emit('room_created', { 
         roomId, 
-        isHost: false, 
-        username,
-        currentCardIndex: rooms[roomId].currentCardIndex,
-        revealChoices: rooms[roomId].revealChoices
+        isHost: true, 
+        username: username.trim(),
+        room: room
       });
       
-      // Update all players in the room
-      io.to(roomId).emit('update_room', rooms[roomId]);
-      io.to(roomId).emit('player_joined', { username });
-      
-      console.log(`${username} joined room: ${roomId}`);
-    } else {
-      socket.emit('error', { message: 'Room not found' });
+      console.log(`Room created: ${roomId} by ${username}`);
+    } catch (error) {
+      console.error('Error creating room:', error);
+      socket.emit('error', { message: 'Failed to create room' });
     }
   });
 
-  // Start the game
+  // Join an existing room with improved error handling
+  socket.on('join_room', ({ roomId, username }) => {
+    try {
+      if (!username || typeof username !== 'string' || username.trim().length === 0) {
+        socket.emit('error', { message: 'Invalid username' });
+        return;
+      }
+
+      if (!roomId || typeof roomId !== 'string') {
+        socket.emit('error', { message: 'Invalid room ID' });
+        return;
+      }
+
+      const room = rooms.get(roomId);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      // Check if username is already taken in this room
+      const existingPlayer = room.players.find(p => p.username === username.trim());
+      if (existingPlayer) {
+        socket.emit('error', { message: 'Username already taken in this room' });
+        return;
+      }
+
+      // Check if game is in progress and allow late joiners
+      const isLateJoiner = room.gameStarted;
+      
+      socket.join(roomId);
+      socketToRoom.set(socket.id, roomId);
+      
+      // Add player to the room
+      const newPlayer = {id: socket.id, username: username.trim(), ready: false};
+      room.players.push(newPlayer);
+      room.playerChoices[socket.id] = null;
+      room.lastActivity = Date.now();
+      
+      // Send appropriate response based on game state
+      if (isLateJoiner) {
+        // Late joiner - send current game state
+        const currentCard = getCurrentCard(room);
+        socket.emit('room_joined', { 
+          roomId, 
+          isHost: false, 
+          username: username.trim(),
+          currentCardIndex: room.currentCardIndex,
+          revealChoices: room.revealChoices,
+          gameStarted: true,
+          currentCard: currentCard,
+          isLateJoiner: true
+        });
+        
+        // Also send immediate game state sync for late joiners
+        socket.emit('game_state_sync', {
+          gameStarted: true,
+          currentCard: currentCard,
+          currentCardIndex: room.currentCardIndex,
+          revealChoices: room.revealChoices,
+          isLateJoiner: true
+        });
+        
+        console.log(`${username} joined room: ${roomId} as late joiner - current card: ${currentCard}`);
+      } else {
+        // Normal joiner
+        socket.emit('room_joined', { 
+          roomId, 
+          isHost: false, 
+          username: username.trim(),
+          currentCardIndex: room.currentCardIndex,
+          revealChoices: room.revealChoices,
+          isLateJoiner: false
+        });
+        
+        console.log(`${username} joined room: ${roomId} as normal joiner`);
+      }
+      
+      // Update all players in the room
+      broadcastRoomUpdate(roomId, room);
+      io.to(roomId).emit('player_joined', { username: username.trim(), isLateJoiner });
+      
+    } catch (error) {
+      console.error('Error joining room:', error);
+      socket.emit('error', { message: 'Failed to join room' });
+    }
+  });
+
+  // Start the game with improved state management
   socket.on('start_game', (roomId) => {
-    if (rooms[roomId] && rooms[roomId].host === socket.id) {
+    try {
+      const room = rooms.get(roomId);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      if (room.host !== socket.id) {
+        socket.emit('error', { message: 'Only the host can start the game' });
+        return;
+      }
+
+      if (room.gameStarted) {
+        socket.emit('error', { message: 'Game already started' });
+        return;
+      }
+
       // Shuffle the cards for this game session
       const shuffledCards = shuffleCards(cards);
       
-      rooms[roomId].gameStarted = true;
-      rooms[roomId].currentCardIndex = 0;
-      rooms[roomId].revealChoices = false;
-      rooms[roomId].playerChoices = {};
-      rooms[roomId].shuffledCards = shuffledCards;
-      rooms[roomId].cardHistory = {}; // Reset card history
+      room.gameStarted = true;
+      room.currentCardIndex = 0;
+      room.revealChoices = false;
+      room.playerChoices = {};
+      room.shuffledCards = shuffledCards;
+      room.cardHistory = {};
+      room.lastActivity = Date.now();
       
       // Reset player choices for the new card
-      rooms[roomId].players.forEach(player => {
-        rooms[roomId].playerChoices[player.id] = null;
+      room.players.forEach(player => {
+        room.playerChoices[player.id] = null;
+        player.ready = false;
       });
       
+      const currentCard = getCurrentCard(room);
+      
       io.to(roomId).emit('game_started', { 
-        card: shuffledCards[0],
+        card: currentCard,
         currentCardIndex: 0
       });
       
       console.log(`Game started in room: ${roomId} with shuffled cards`);
+    } catch (error) {
+      console.error('Error starting game:', error);
+      socket.emit('error', { message: 'Failed to start game' });
     }
   });
 
-  // Submit card choice
+  // Submit card choice with validation
   socket.on('submit_choice', ({ roomId, choice }) => {
-    if (rooms[roomId]) {
-      rooms[roomId].playerChoices[socket.id] = choice;
+    try {
+      const room = rooms.get(roomId);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      if (!room.gameStarted) {
+        socket.emit('error', { message: 'Game not started' });
+        return;
+      }
+
+      if (!['support', 'erode', 'depends'].includes(choice)) {
+        socket.emit('error', { message: 'Invalid choice' });
+        return;
+      }
+
+      room.playerChoices[socket.id] = choice;
+      room.lastActivity = Date.now();
       
-      const player = rooms[roomId].players.find(p => p.id === socket.id);
+      const player = room.players.find(p => p.id === socket.id);
       if (player) {
         player.ready = true;
       }
       
-      io.to(roomId).emit('update_room', rooms[roomId]);
+      broadcastRoomUpdate(roomId, room);
       console.log(`Player ${socket.id} in room ${roomId} chose: ${choice}`);
+    } catch (error) {
+      console.error('Error submitting choice:', error);
+      socket.emit('error', { message: 'Failed to submit choice' });
     }
   });
 
   // Reveal all choices
   socket.on('reveal_choices', (roomId) => {
-    if (rooms[roomId] && rooms[roomId].host === socket.id) {
-      rooms[roomId].revealChoices = true;
-      io.to(roomId).emit('choices_revealed', rooms[roomId].playerChoices);
+    try {
+      const room = rooms.get(roomId);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      if (room.host !== socket.id) {
+        socket.emit('error', { message: 'Only the host can reveal choices' });
+        return;
+      }
+
+      if (!room.gameStarted) {
+        socket.emit('error', { message: 'Game not started' });
+        return;
+      }
+
+      room.revealChoices = true;
+      room.lastActivity = Date.now();
+      
+      io.to(roomId).emit('choices_revealed', room.playerChoices);
+      broadcastRoomUpdate(roomId, room);
       console.log(`Choices revealed in room: ${roomId}`);
+    } catch (error) {
+      console.error('Error revealing choices:', error);
+      socket.emit('error', { message: 'Failed to reveal choices' });
     }
   });
 
-  // Move to next card
+  // Move to next card with improved state management
   socket.on('next_card', (roomId) => {
-    if (rooms[roomId] && rooms[roomId].host === socket.id) {
-      const currentIndex = rooms[roomId].currentCardIndex;
+    try {
+      const room = rooms.get(roomId);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      if (room.host !== socket.id) {
+        socket.emit('error', { message: 'Only the host can move to next card' });
+        return;
+      }
+
+      if (!room.gameStarted) {
+        socket.emit('error', { message: 'Game not started' });
+        return;
+      }
+
+      const currentIndex = room.currentCardIndex;
       
       // Save current card choices to history before moving to next card
-      if (!rooms[roomId].cardHistory[currentIndex]) {
-        rooms[roomId].cardHistory[currentIndex] = {};
+      if (!room.cardHistory[currentIndex]) {
+        room.cardHistory[currentIndex] = {};
       }
       
       // Copy current choices to history
-      Object.keys(rooms[roomId].playerChoices).forEach(playerId => {
-        if (rooms[roomId].playerChoices[playerId]) {
-          rooms[roomId].cardHistory[currentIndex][playerId] = rooms[roomId].playerChoices[playerId];
+      Object.keys(room.playerChoices).forEach(playerId => {
+        if (room.playerChoices[playerId]) {
+          room.cardHistory[currentIndex][playerId] = room.playerChoices[playerId];
         }
       });
       
@@ -250,20 +465,24 @@ io.on('connection', (socket) => {
       
       const nextIndex = currentIndex + 1;
       
-      if (nextIndex < rooms[roomId].shuffledCards.length) {
-        rooms[roomId].currentCardIndex = nextIndex;
-        rooms[roomId].revealChoices = false;
+      if (nextIndex < room.shuffledCards.length) {
+        room.currentCardIndex = nextIndex;
+        room.revealChoices = false;
+        room.lastActivity = Date.now();
         
         // Reset player choices for the new card
-        rooms[roomId].players.forEach(player => {
+        room.players.forEach(player => {
           player.ready = false;
-          rooms[roomId].playerChoices[player.id] = null;
+          room.playerChoices[player.id] = null;
         });
         
+        const currentCard = getCurrentCard(room);
+        
         io.to(roomId).emit('new_card', { 
-          card: rooms[roomId].shuffledCards[nextIndex], 
+          card: currentCard, 
           currentCardIndex: nextIndex 
         });
+        broadcastRoomUpdate(roomId, room);
         
         console.log(`Moved to card ${nextIndex} in room: ${roomId}`);
       } else {
@@ -276,70 +495,172 @@ io.on('connection', (socket) => {
         });
         console.log(`Game over in room: ${roomId}`);
       }
+    } catch (error) {
+      console.error('Error moving to next card:', error);
+      socket.emit('error', { message: 'Failed to move to next card' });
     }
   });
 
   // Update card position after discussion
   socket.on('update_choice', ({ roomId, choice }) => {
-    if (rooms[roomId] && rooms[roomId].revealChoices) {
-      rooms[roomId].playerChoices[socket.id] = choice;
+    try {
+      const room = rooms.get(roomId);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      if (!room.revealChoices) {
+        socket.emit('error', { message: 'Choices not revealed yet' });
+        return;
+      }
+
+      if (!['support', 'erode', 'depends'].includes(choice)) {
+        socket.emit('error', { message: 'Invalid choice' });
+        return;
+      }
+
+      room.playerChoices[socket.id] = choice;
+      room.lastActivity = Date.now();
+      
       io.to(roomId).emit('choice_updated', {
         playerId: socket.id,
         choice
       });
+      broadcastRoomUpdate(roomId, room);
       console.log(`Player ${socket.id} updated choice to: ${choice}`);
+    } catch (error) {
+      console.error('Error updating choice:', error);
+      socket.emit('error', { message: 'Failed to update choice' });
     }
   });
 
+  // Get room data with improved error handling
   socket.on('get_room_data', (roomId) => {
-    console.log(`Room data requested for: ${roomId}`);
-    if (rooms[roomId]) {
-      socket.emit('update_room', rooms[roomId]);
-    } else {
-      socket.emit('error', { message: 'Room not found' });
-      console.log(`Room ${roomId} not found when requested`);
+    try {
+      console.log(`Room data requested for: ${roomId}`);
+      const room = rooms.get(roomId);
+      if (room) {
+        socket.emit('update_room', room);
+        
+        // If game is started, also send current card
+        if (room.gameStarted) {
+          const currentCard = getCurrentCard(room);
+          socket.emit('game_state_sync', {
+            gameStarted: true,
+            currentCard: currentCard,
+            currentCardIndex: room.currentCardIndex,
+            revealChoices: room.revealChoices
+          });
+        }
+      } else {
+        socket.emit('error', { message: 'Room not found' });
+        console.log(`Room ${roomId} not found when requested`);
+      }
+    } catch (error) {
+      console.error('Error getting room data:', error);
+      socket.emit('error', { message: 'Failed to get room data' });
     }
   });
 
-  // Handle disconnection
+  // Handle disconnection with improved cleanup
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
     
-    // Remove player from all rooms they were in
-    for (const roomId in rooms) {
-      const room = rooms[roomId];
-      const playerIndex = room.players.findIndex(p => p.id === socket.id);
-      
-      if (playerIndex !== -1) {
-        const username = room.players[playerIndex].username;
-        room.players.splice(playerIndex, 1);
-        
-        if (room.playerChoices[socket.id]) {
-          delete room.playerChoices[socket.id];
+    const roomId = socketToRoom.get(socket.id);
+    if (roomId) {
+      const player = removePlayerFromRoom(socket.id, roomId);
+      if (player) {
+        const room = rooms.get(roomId);
+        if (room) {
+          io.to(roomId).emit('player_left', { username: player.username });
+          broadcastRoomUpdate(roomId, room);
         }
-        
-        // If host leaves, assign a new host or close the room
-        if (room.host === socket.id) {
-          if (room.players.length > 0) {
-            room.host = room.players[0].id;
-            io.to(roomId).emit('new_host', { hostId: room.host });
-          } else {
-            delete rooms[roomId];
-            continue;
-          }
-        }
-        
-        io.to(roomId).emit('player_left', { username });
-        io.to(roomId).emit('update_room', room);
       }
     }
   });
+
+  // Handle errors
+  socket.on('error', (error) => {
+    console.error('Socket error:', error);
+  });
 });
 
-// Generate a 6-character alphanumeric room ID
-function generateRoomId() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
+// Cleanup inactive rooms periodically (every 30 minutes)
+setInterval(() => {
+  const now = Date.now();
+  const inactiveThreshold = 30 * 60 * 1000; // 30 minutes
+  
+  for (const [roomId, room] of rooms.entries()) {
+    if (now - room.lastActivity > inactiveThreshold) {
+      console.log(`Cleaning up inactive room: ${roomId}`);
+      rooms.delete(roomId);
+      
+      // Clean up socket mappings
+      for (const [socketId, mappedRoomId] of socketToRoom.entries()) {
+        if (mappedRoomId === roomId) {
+          socketToRoom.delete(socketId);
+        }
+      }
+    }
+  }
+}, 30 * 60 * 1000);
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  const healthData = {
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    activeRooms: rooms.size,
+    activeConnections: io.engine.clientsCount,
+    memoryUsage: process.memoryUsage(),
+    nodeVersion: process.version
+  };
+  
+  res.json(healthData);
+});
+
+// Server statistics endpoint
+app.get('/stats', (req, res) => {
+  const stats = {
+    totalRooms: rooms.size,
+    activeConnections: io.engine.clientsCount,
+    totalPlayers: Array.from(rooms.values()).reduce((total, room) => total + room.players.length, 0),
+    activeGames: Array.from(rooms.values()).filter(room => room.gameStarted).length,
+    serverUptime: process.uptime(),
+    memoryUsage: process.memoryUsage()
+  };
+  
+  res.json(stats);
+});
+
+// Cleanup inactive rooms endpoint (for manual cleanup)
+app.post('/cleanup', (req, res) => {
+  const now = Date.now();
+  const inactiveThreshold = 30 * 60 * 1000; // 30 minutes
+  let cleanedRooms = 0;
+  
+  for (const [roomId, room] of rooms.entries()) {
+    if (now - room.lastActivity > inactiveThreshold) {
+      console.log(`Manually cleaning up inactive room: ${roomId}`);
+      rooms.delete(roomId);
+      cleanedRooms++;
+      
+      // Clean up socket mappings
+      for (const [socketId, mappedRoomId] of socketToRoom.entries()) {
+        if (mappedRoomId === roomId) {
+          socketToRoom.delete(socketId);
+        }
+      }
+    }
+  }
+  
+  res.json({ 
+    message: `Cleaned up ${cleanedRooms} inactive rooms`,
+    remainingRooms: rooms.size 
+  });
+});
 
 app.get('/admin', (req, res) => {
   const adminHtml = `
@@ -362,10 +683,22 @@ app.get('/admin', (req, res) => {
           margin-right: 5px;
           border-radius: 3px;
         }
+        .stats { 
+          background: #f9f9f9; 
+          padding: 15px; 
+          border-radius: 5px; 
+          margin-bottom: 20px; 
+        }
       </style>
     </head>
     <body>
       <h1>Rithm Project - Game Results</h1>
+      
+      <div class="stats">
+        <h3>Server Statistics</h3>
+        <div id="serverStats">Loading...</div>
+      </div>
+      
       <table id="resultsTable">
         <tr>
           <th>Filename</th>
@@ -379,6 +712,23 @@ app.get('/admin', (req, res) => {
       </table>
 
       <script>
+        // Load server stats
+        fetch('/stats')
+          .then(response => response.json())
+          .then(data => {
+            document.getElementById('serverStats').innerHTML = \`
+              <p><strong>Active Rooms:</strong> \${data.totalRooms}</p>
+              <p><strong>Active Connections:</strong> \${data.activeConnections}</p>
+              <p><strong>Total Players:</strong> \${data.totalPlayers}</p>
+              <p><strong>Active Games:</strong> \${data.activeGames}</p>
+              <p><strong>Server Uptime:</strong> \${Math.floor(data.serverUptime / 60)} minutes</p>
+            \`;
+          })
+          .catch(error => {
+            console.error('Error fetching stats:', error);
+          });
+
+        // Load game results
         fetch('/admin/results')
           .then(response => response.json())
           .then(data => {
