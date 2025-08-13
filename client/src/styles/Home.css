@@ -33,14 +33,10 @@
 .rithm-logo {
   position: absolute;
   top: 30px;
-  left: 50px;
+  left: 30px;
   font-weight: 700;
   font-size: 18px;
   letter-spacing: 0.5px;
-}
-
-#rithm-logo {
-  max-width: 100px;
 }
 
 .home-content h1 {
@@ -69,6 +65,28 @@
   font-size: 15px;
 }
 
+.form-group input {
+  width: 100%;
+  padding: 12px 16px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 16px;
+  transition: border-color 0.3s, box-shadow 0.3s;
+  box-sizing: border-box;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #ff6b8b;
+  box-shadow: 0 0 0 3px rgba(255, 107, 139, 0.1);
+}
+
+.form-group input:disabled {
+  background-color: #f5f5f5;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
 .buttons {
   display: flex;
   flex-direction: column;
@@ -76,11 +94,38 @@
   margin-top: 40px;
 }
 
+.create-btn, .join-btn {
+  padding: 14px;
+  font-size: 16px;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+  position: relative;
+  overflow: hidden;
+}
+
 .create-btn {
   background: linear-gradient(135deg, #47b884 0%, #4ca2cd 100%);
   color: white;
-  padding: 14px;
-  font-size: 16px;
+}
+
+.join-btn {
+  background: linear-gradient(135deg, #ff6b8b 0%, #ffa26b 100%);
+  color: white;
+}
+
+.create-btn:hover, .join-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+.create-btn:disabled, .join-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .join-section {
@@ -98,17 +143,57 @@
   margin-bottom: 10px;
 }
 
-.join-btn {
-  background: linear-gradient(135deg, #ff6b8b 0%, #ffa26b 100%);
+/* Error message styling */
+.error-message {
+  background: linear-gradient(135deg, #ff8a80 0%, #ff5252 100%);
   color: white;
-  padding: 14px;
-  font-size: 16px;
+  margin-top: 15px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-weight: 500;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 4px 15px rgba(255, 82, 82, 0.2);
 }
 
-.error-message {
-  color: #f44336;
-  margin-top: 15px;
+.error-message p {
+  margin: 0;
+}
+
+.dismiss-error {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background-color 0.2s;
+}
+
+.dismiss-error:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Loading indicator */
+.loading-indicator {
   text-align: center;
+  margin-top: 20px;
+  padding: 15px;
+  background: linear-gradient(135deg, rgba(71, 184, 132, 0.1) 0%, rgba(76, 162, 205, 0.1) 100%);
+  border-radius: 8px;
+  border: 1px solid rgba(71, 184, 132, 0.3);
+}
+
+.loading-indicator p {
+  margin: 0;
+  color: #47b884;
   font-weight: 500;
 }
 
@@ -131,5 +216,11 @@
   .home-content h2 {
     font-size: 16px;
     max-width: 100%;
+  }
+
+  .error-message {
+    flex-direction: column;
+    gap: 10px;
+    text-align: center;
   }
 }

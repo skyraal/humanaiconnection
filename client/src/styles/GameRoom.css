@@ -68,6 +68,105 @@
   padding: 8px 15px;
 }
 
+/* Error banner */
+.error-banner {
+  background: linear-gradient(135deg, #ff8a80 0%, #ff5252 100%);
+  color: white;
+  padding: 12px 20px;
+  margin: 0 20px;
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 10px rgba(255, 82, 82, 0.2);
+}
+
+.error-banner p {
+  margin: 0;
+  font-weight: 500;
+}
+
+.dismiss-btn {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background-color 0.2s;
+}
+
+.dismiss-btn:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Loading and reconnection states */
+.loading, .reconnecting {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 20px;
+  padding: 40px;
+  background: linear-gradient(135deg, rgba(255, 107, 139, 0.05) 0%, rgba(255, 162, 107, 0.05) 100%);
+  border-radius: 12px;
+  margin: 20px;
+}
+
+.loading h2, .reconnecting h2 {
+  font-size: 28px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #ff6b8b 0%, #ffa26b 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.loading p, .reconnecting p {
+  font-size: 16px;
+  color: #666;
+  max-width: 400px;
+  line-height: 1.5;
+}
+
+.error-container {
+  margin-top: 20px;
+  padding: 20px;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  text-align: center;
+}
+
+.error-message {
+  color: #d32f2f;
+  font-weight: 500;
+  margin-bottom: 15px;
+}
+
+.retry-btn {
+  background: linear-gradient(135deg, #4db6ac 0%, #26a69a 100%);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.retry-btn:hover {
+  transform: translateY(-1px);
+}
+
 .game-content {
   display: flex;
   flex: 1;
@@ -164,6 +263,15 @@
   margin-bottom: 20px;
 }
 
+.warning {
+  color: #ff9800;
+  font-weight: 500;
+  background: rgba(255, 152, 0, 0.1);
+  padding: 10px 15px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 152, 0, 0.3);
+}
+
 .current-players {
   padding: 10px 20px;
   background: white;
@@ -242,6 +350,17 @@
   .room-info {
     flex-wrap: wrap;
     justify-content: center;
+  }
+
+  .error-banner {
+    margin: 0 10px;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .loading, .reconnecting {
+    margin: 10px;
+    padding: 20px;
   }
 }
 

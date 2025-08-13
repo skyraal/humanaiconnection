@@ -3,29 +3,45 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
+const Redis = require('ioredis');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 app.use(cors());
+app.use(express.json());
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP'
+});
+app.use(limiter);
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
-      ? ['https://humanaiconnectiongame.onrender.com'] 
+      ? ['https://rithm-game-frontend.onrender.com'] 
       : '*',
     methods: ['GET', 'POST']
-  }
+  },
+  transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
-// Game state
-const rooms = {};
+// Redis connection for scalable state management
+const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+
+// Game cards
 const cards = [
   "Preparing to have a tough conversation by practicing it first with an AI bot.",
   "Checking in with your AI girlfriend/boyfriend throughout the day.",
   "Generating AI bedtime stories for a younger sibling, using personal information about your family to customize them.",
   "Creating a holographic version of yourself to attend a far-away family gathering.",
-  "Using a friend’s photo to create a deep fake video as a joke.",
-  "Letting AI auto-reply to your friends’ messages when you’re feeling overwhelmed.",
+  "Using a friend's photo to create a deep fake video as a joke.",
+  "Letting AI auto-reply to your friends' messages when you're feeling overwhelmed.",
   "Using video calls to stay connected with long-distance family members.",
   "Checking your partner's phone without their knowledge.",
   "Playing online multiplayer games with friends during a pandemic.",
@@ -33,7 +49,7 @@ const cards = [
   "Tasking AI with tracking special moments in your friends’ lives and sending personalized messages and gifts", "Engage in AI-simulations that help you see the world/ scenarios from someone else’s perspective", "Participating in a virtual AI-facilitated group therapy session", "Using a tool to ‘optimize’ your social media pictures", "Venting frustrations to an AI bot", "Create a memory bank that you and your friends share and can ‘look into’ for years to come", "Using AI that tracks your emotions and translates them into visual art that others can see (like a public ‘mood ring’)", "Letting an AI summarize your friend’s texts when you don’t feel like reading long messages", "Asking an AI chatbot for advice on dealing with feelings of loneliness", "Asking AI to write a heartfelt speech for a friend’s special occasion", "Talking to an AI preserved version of a beloved deceased relative or ancestor", "Generating an AI-created message to apologize to a friend after a fight", "Using AI to translate a message for someone who speaks another language", "Making AI version of your favorite movie/book/tv character to chat with when you are bored", "Having an AI version of you sign on to class", "Using AI to analyze all of your personal data (emails, texts, search history), to recommend romantic partners", "Using a hidden AI companion in your ear to prompt you with topics, questions, and responses while you’re in conversation with someone", "Using AI to rate your physical appearance and offer tips to improve it"
 ];
 
-// Fisher-Yates shuffle algorithm to randomize card order
+// Utility functions
 function shuffleCards(array) {
   const shuffled = [...array];
   for (let i = shuffled.length - 1; i > 0; i--) {
@@ -43,368 +59,626 @@ function shuffleCards(array) {
   return shuffled;
 }
 
-// Store game results
-const fs = require('fs');
-const path = require('path');
-
-function saveGameResults(roomId, isFinal = false) {
-  console.log(`Saving results for room: ${roomId}, isFinal: ${isFinal}`);
-  
-  if (!rooms[roomId]) {
-    console.log(`Room ${roomId} not found. Cannot save results.`);
-    return;
-  }
-  
-  const room = rooms[roomId];
-  const gameData = {
-    roomId,
-    timestamp: new Date().toISOString(),
-    host: room.players.find(p => p.id === room.host)?.username || "Unknown host",
-    players: room.players.map(p => p.username),
-    currentCardIndex: room.currentCardIndex,
-    isGameComplete: isFinal,
-    cards: [],
-  };
-  
-  // Add card results for all cards that have been shown
-  for (let i = 0; i <= room.currentCardIndex; i++) {
-    if (i < room.shuffledCards.length) {
-      const cardResults = {
-        promptText: room.shuffledCards[i],
-        playerChoices: {}
-      };
-      
-      // Collect player choices for this card
-      room.players.forEach(player => {
-        // Get choice from card history if available, otherwise from current choices
-        let playerChoice = null;
-        
-        if (room.cardHistory && room.cardHistory[i] && 
-            room.cardHistory[i][player.id]) {
-          playerChoice = room.cardHistory[i][player.id];
-        } else if (i === room.currentCardIndex && room.playerChoices[player.id]) {
-          playerChoice = room.playerChoices[player.id];
-        }
-        
-        if (playerChoice) {
-          cardResults.playerChoices[player.username] = playerChoice;
-        }
-      });
-      
-      gameData.cards.push(cardResults);
-    }
-  }
-  
-  try {
-    // Ensure the results directory exists
-    const resultsDir = path.join(__dirname, 'game_results');
-    if (!fs.existsSync(resultsDir)) {
-      fs.mkdirSync(resultsDir, { recursive: true });
-      console.log(`Created results directory: ${resultsDir}`);
-    }
-    
-    // Write the game results to a JSON file
-    const timestamp = Date.now();
-    const filename = `game_${roomId}_${timestamp}${isFinal ? '_final' : ''}.json`;
-    const filePath = path.join(resultsDir, filename);
-    
-    fs.writeFileSync(filePath, JSON.stringify(gameData, null, 2));
-    
-    console.log(`Game results saved to ${filePath}`);
-    return filePath;
-  } catch (error) {
-    console.error('Failed to save game results:', error);
-    return null;
-  }
+function generateRoomId() {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// Socket connection handler
-io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.id}`);
+// Room management class
+class RoomManager {
+  constructor() {
+    this.rooms = new Map();
+    this.cleanupInterval = setInterval(() => this.cleanupInactiveRooms(), 40 * 60 * 1000); // 5 minutes
+  }
 
-  // Create a new game room
-  socket.on('create_room', (username) => {
+  async createRoom(hostId, username) {
     const roomId = generateRoomId();
-    
-    rooms[roomId] = {
-      host: socket.id,
-      players: [{id: socket.id, username, ready: false}],
+    const room = {
+      id: roomId,
+      host: hostId,
+      players: [{ id: hostId, username, ready: false, joinedAt: Date.now() }],
       currentCardIndex: 0,
       revealChoices: false,
       playerChoices: {},
-      cardHistory: {}, // Store choices for all cards to save in JSON
+      cardHistory: {},
       gameStarted: false,
-      shuffledCards: [] // Will store shuffled cards when game starts
+      shuffledCards: [],
+      createdAt: Date.now(),
+      lastActivity: Date.now(),
+      maxPlayers: 20,
+      status: 'waiting' // waiting, playing, finished
     };
-    
-    socket.join(roomId);
-    // First emit room_created with complete room data
-    socket.emit('room_created', { 
-      roomId, 
-      isHost: true, 
-      username,
-      room: rooms[roomId] // Include the entire room object
-    });
+
+    this.rooms.set(roomId, room);
+    await this.saveRoomToRedis(roomId, room);
     
     console.log(`Room created: ${roomId} by ${username}`);
+    return room;
+  }
+
+  async getRoom(roomId) {
+    let room = this.rooms.get(roomId);
+    if (!room) {
+      room = await this.loadRoomFromRedis(roomId);
+      if (room) {
+        this.rooms.set(roomId, room);
+      }
+    }
+    return room;
+  }
+
+  async updateRoom(roomId, updates) {
+    const room = await this.getRoom(roomId);
+    if (room) {
+      Object.assign(room, updates, { lastActivity: Date.now() });
+      this.rooms.set(roomId, room);
+      await this.saveRoomToRedis(roomId, room);
+    }
+    return room;
+  }
+
+  async addPlayer(roomId, playerId, username) {
+    const room = await this.getRoom(roomId);
+    if (!room) return null;
+
+    if (room.players.length >= room.maxPlayers) {
+      throw new Error('Room is full');
+    }
+
+    if (room.players.find(p => p.id === playerId)) {
+      throw new Error('Player already in room');
+    }
+
+    room.players.push({ id: playerId, username, ready: false, joinedAt: Date.now() });
+    room.playerChoices[playerId] = null;
+    room.lastActivity = Date.now();
+
+    this.rooms.set(roomId, room);
+    await this.saveRoomToRedis(roomId, room);
+    
+    return room;
+  }
+
+  async removePlayer(roomId, playerId) {
+    const room = await this.getRoom(roomId);
+    if (!room) return null;
+
+    const playerIndex = room.players.findIndex(p => p.id === playerId);
+    if (playerIndex === -1) return room;
+
+    const removedPlayer = room.players[playerIndex];
+    room.players.splice(playerIndex, 1);
+    
+    if (room.playerChoices[playerId]) {
+      delete room.playerChoices[playerId];
+    }
+
+    // Handle host transfer
+    if (room.host === playerId) {
+      if (room.players.length > 0) {
+        room.host = room.players[0].id;
+      } else {
+        // Room is empty, mark for deletion
+        room.status = 'finished';
+      }
+    }
+
+    room.lastActivity = Date.now();
+    this.rooms.set(roomId, room);
+    await this.saveRoomToRedis(roomId, room);
+    
+    return { room, removedPlayer };
+  }
+
+  async startGame(roomId, hostId) {
+    const room = await this.getRoom(roomId);
+    if (!room || room.host !== hostId) {
+      throw new Error('Not authorized to start game');
+    }
+
+    const shuffledCards = shuffleCards(cards);
+    const updates = {
+      gameStarted: true,
+      currentCardIndex: 0,
+      revealChoices: false,
+      playerChoices: {},
+      shuffledCards,
+      cardHistory: {},
+      status: 'playing',
+      lastActivity: Date.now()
+    };
+
+    // Reset player choices
+    room.players.forEach(player => {
+      updates.playerChoices[player.id] = null;
+    });
+
+    return await this.updateRoom(roomId, updates);
+  }
+
+  async submitChoice(roomId, playerId, choice) {
+    const room = await this.getRoom(roomId);
+    if (!room || !room.gameStarted) {
+      throw new Error('Game not started');
+    }
+
+    room.playerChoices[playerId] = choice;
+    const player = room.players.find(p => p.id === playerId);
+    if (player) {
+      player.ready = true;
+    }
+
+    room.lastActivity = Date.now();
+    this.rooms.set(roomId, room);
+    await this.saveRoomToRedis(roomId, room);
+    
+    return room;
+  }
+
+  async nextCard(roomId, hostId) {
+    const room = await this.getRoom(roomId);
+    if (!room || room.host !== hostId) {
+      throw new Error('Not authorized');
+    }
+
+    const currentIndex = room.currentCardIndex;
+    
+    // Save current card choices to history
+    if (!room.cardHistory[currentIndex]) {
+      room.cardHistory[currentIndex] = {};
+    }
+    
+    Object.keys(room.playerChoices).forEach(playerId => {
+      if (room.playerChoices[playerId]) {
+        room.cardHistory[currentIndex][playerId] = room.playerChoices[playerId];
+      }
+    });
+
+    const nextIndex = currentIndex + 1;
+    
+    if (nextIndex < room.shuffledCards.length) {
+      const updates = {
+        currentCardIndex: nextIndex,
+        revealChoices: false,
+        playerChoices: {},
+        lastActivity: Date.now()
+      };
+
+      // Reset player choices for the new card
+      room.players.forEach(player => {
+        player.ready = false;
+        updates.playerChoices[player.id] = null;
+      });
+
+      return await this.updateRoom(roomId, updates);
+    } else {
+      // Game is over
+      const updates = {
+        status: 'finished',
+        lastActivity: Date.now()
+      };
+      
+      await this.saveGameResults(room, true);
+      return await this.updateRoom(roomId, updates);
+    }
+  }
+
+  async saveRoomToRedis(roomId, room) {
+    try {
+      await redis.setex(`room:${roomId}`, 3600, JSON.stringify(room)); // 1 hour TTL
+    } catch (error) {
+      console.error('Failed to save room to Redis:', error);
+    }
+  }
+
+  async loadRoomFromRedis(roomId) {
+    try {
+      const roomData = await redis.get(`room:${roomId}`);
+      return roomData ? JSON.parse(roomData) : null;
+    } catch (error) {
+      console.error('Failed to load room from Redis:', error);
+      return null;
+    }
+  }
+
+  async saveGameResults(room, isFinal = false) {
+    try {
+      const gameData = {
+        roomId: room.id,
+        timestamp: new Date().toISOString(),
+        host: room.players.find(p => p.id === room.host)?.username || "Unknown host",
+        players: room.players.map(p => p.username),
+        currentCardIndex: room.currentCardIndex,
+        isGameComplete: isFinal,
+        cards: []
+      };
+
+      // Add card results for all cards that have been shown
+      for (let i = 0; i <= room.currentCardIndex; i++) {
+        if (i < room.shuffledCards.length) {
+          const cardResults = {
+            promptText: room.shuffledCards[i],
+            playerChoices: {}
+          };
+
+          room.players.forEach(player => {
+            let playerChoice = null;
+            
+            if (room.cardHistory && room.cardHistory[i] && room.cardHistory[i][player.id]) {
+              playerChoice = room.cardHistory[i][player.id];
+            } else if (i === room.currentCardIndex && room.playerChoices[player.id]) {
+              playerChoice = room.playerChoices[player.id];
+            }
+            
+            if (playerChoice) {
+              cardResults.playerChoices[player.username] = playerChoice;
+            }
+          });
+
+          gameData.cards.push(cardResults);
+        }
+      }
+
+      const timestamp = Date.now();
+      const filename = `game_${room.id}_${timestamp}${isFinal ? '_final' : ''}.json`;
+      
+      await redis.setex(`game_result:${filename}`, 86400, JSON.stringify(gameData)); // 24 hour TTL
+      
+      console.log(`Game results saved: ${filename}`);
+      return filename;
+    } catch (error) {
+      console.error('Failed to save game results:', error);
+      return null;
+    }
+  }
+
+  cleanupInactiveRooms() {
+    const now = Date.now();
+    const inactiveThreshold = 30 * 60 * 1000; // 30 minutes
+
+    for (const [roomId, room] of this.rooms.entries()) {
+      if (now - room.lastActivity > inactiveThreshold) {
+        console.log(`Cleaning up inactive room: ${roomId}`);
+        this.rooms.delete(roomId);
+        redis.del(`room:${roomId}`);
+      }
+    }
+  }
+
+  getActiveRooms() {
+    return Array.from(this.rooms.values()).filter(room => room.status !== 'finished');
+  }
+}
+
+const roomManager = new RoomManager();
+
+// Socket connection handler with improved error handling and reconnection support
+io.on('connection', (socket) => {
+  console.log(`User connected: ${socket.id}`);
+  
+  let currentRoomId = null;
+  let currentUsername = null;
+
+  // Handle reconnection
+  socket.on('reconnect_attempt', async (data) => {
+    try {
+      const { roomId, username } = data;
+      if (roomId && username) {
+        const room = await roomManager.getRoom(roomId);
+        if (room && room.players.find(p => p.username === username)) {
+          // Reconnect to room
+          socket.join(roomId);
+          currentRoomId = roomId;
+          currentUsername = username;
+          
+          socket.emit('reconnected', { room, isHost: room.host === socket.id });
+          io.to(roomId).emit('player_reconnected', { username });
+        }
+      }
+    } catch (error) {
+      console.error('Reconnection error:', error);
+      socket.emit('error', { message: 'Reconnection failed' });
+    }
+  });
+
+  // Get room data (missing handler that was causing issues)
+  socket.on('get_room_data', async (roomId) => {
+    try {
+      const room = await roomManager.getRoom(roomId);
+      if (room) {
+        socket.emit('room_data', room);
+      } else {
+        socket.emit('error', { message: 'Room not found' });
+      }
+    } catch (error) {
+      console.error('Error getting room data:', error);
+      socket.emit('error', { message: 'Failed to get room data' });
+    }
+  });
+
+  // Create a new game room
+  socket.on('create_room', async (username) => {
+    try {
+      if (!username || username.trim().length === 0) {
+        socket.emit('error', { message: 'Username is required' });
+        return;
+      }
+
+      const room = await roomManager.createRoom(socket.id, username.trim());
+      socket.join(room.id);
+      currentRoomId = room.id;
+      currentUsername = username;
+
+      socket.emit('room_created', { 
+        roomId: room.id, 
+        isHost: true, 
+        username,
+        room
+      });
+    } catch (error) {
+      console.error('Error creating room:', error);
+      socket.emit('error', { message: 'Failed to create room' });
+    }
   });
 
   // Join an existing room
-  socket.on('join_room', ({ roomId, username }) => {
-    if (rooms[roomId]) {
+  socket.on('join_room', async ({ roomId, username }) => {
+    try {
+      if (!username || username.trim().length === 0) {
+        socket.emit('error', { message: 'Username is required' });
+        return;
+      }
+
+      if (!roomId || roomId.trim().length === 0) {
+        socket.emit('error', { message: 'Room ID is required' });
+        return;
+      }
+
+      const room = await roomManager.getRoom(roomId);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      if (room.status === 'finished') {
+        socket.emit('error', { message: 'Game has ended' });
+        return;
+      }
+
+      const updatedRoom = await roomManager.addPlayer(roomId, socket.id, username.trim());
       socket.join(roomId);
-      
-      // Add player to the room
-      rooms[roomId].players.push({id: socket.id, username, ready: false});
-      rooms[roomId].playerChoices[socket.id] = null;
-      
+      currentRoomId = roomId;
+      currentUsername = username;
+
       socket.emit('room_joined', { 
         roomId, 
         isHost: false, 
         username,
-        currentCardIndex: rooms[roomId].currentCardIndex,
-        revealChoices: rooms[roomId].revealChoices
+        currentCardIndex: updatedRoom.currentCardIndex,
+        revealChoices: updatedRoom.revealChoices
       });
-      
+
       // Update all players in the room
-      io.to(roomId).emit('update_room', rooms[roomId]);
+      io.to(roomId).emit('update_room', updatedRoom);
       io.to(roomId).emit('player_joined', { username });
-      
-      console.log(`${username} joined room: ${roomId}`);
-    } else {
-      socket.emit('error', { message: 'Room not found' });
+    } catch (error) {
+      console.error('Error joining room:', error);
+      socket.emit('error', { message: error.message || 'Failed to join room' });
     }
   });
 
   // Start the game
-  socket.on('start_game', (roomId) => {
-    if (rooms[roomId] && rooms[roomId].host === socket.id) {
-      // Shuffle the cards for this game session
-      const shuffledCards = shuffleCards(cards);
-      
-      rooms[roomId].gameStarted = true;
-      rooms[roomId].currentCardIndex = 0;
-      rooms[roomId].revealChoices = false;
-      rooms[roomId].playerChoices = {};
-      rooms[roomId].shuffledCards = shuffledCards;
-      rooms[roomId].cardHistory = {}; // Reset card history
-      
-      // Reset player choices for the new card
-      rooms[roomId].players.forEach(player => {
-        rooms[roomId].playerChoices[player.id] = null;
-      });
+  socket.on('start_game', async (roomId) => {
+    try {
+      const room = await roomManager.getRoom(roomId);
+      if (!room) {
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      if (room.host !== socket.id) {
+        socket.emit('error', { message: 'Only the host can start the game' });
+        return;
+      }
+
+      if (room.players.length < 1) {
+        socket.emit('error', { message: 'Need at least 1 player to start' });
+        return;
+      }
+
+      const updatedRoom = await roomManager.startGame(roomId, socket.id);
       
       io.to(roomId).emit('game_started', { 
-        card: shuffledCards[0],
+        card: updatedRoom.shuffledCards[0],
         currentCardIndex: 0
       });
       
-      console.log(`Game started in room: ${roomId} with shuffled cards`);
+      io.to(roomId).emit('update_room', updatedRoom);
+    } catch (error) {
+      console.error('Error starting game:', error);
+      socket.emit('error', { message: error.message || 'Failed to start game' });
     }
   });
 
   // Submit card choice
-  socket.on('submit_choice', ({ roomId, choice }) => {
-    if (rooms[roomId]) {
-      rooms[roomId].playerChoices[socket.id] = choice;
-      
-      const player = rooms[roomId].players.find(p => p.id === socket.id);
-      if (player) {
-        player.ready = true;
-      }
-      
-      io.to(roomId).emit('update_room', rooms[roomId]);
-      console.log(`Player ${socket.id} in room ${roomId} chose: ${choice}`);
+  socket.on('submit_choice', async ({ roomId, choice }) => {
+    try {
+      const updatedRoom = await roomManager.submitChoice(roomId, socket.id, choice);
+      io.to(roomId).emit('update_room', updatedRoom);
+    } catch (error) {
+      console.error('Error submitting choice:', error);
+      socket.emit('error', { message: error.message || 'Failed to submit choice' });
     }
   });
 
   // Reveal all choices
-  socket.on('reveal_choices', (roomId) => {
-    if (rooms[roomId] && rooms[roomId].host === socket.id) {
-      rooms[roomId].revealChoices = true;
-      io.to(roomId).emit('choices_revealed', rooms[roomId].playerChoices);
-      console.log(`Choices revealed in room: ${roomId}`);
+  socket.on('reveal_choices', async (roomId) => {
+    try {
+      const room = await roomManager.getRoom(roomId);
+      if (!room || room.host !== socket.id) {
+        socket.emit('error', { message: 'Not authorized' });
+        return;
+      }
+
+      const updatedRoom = await roomManager.updateRoom(roomId, { revealChoices: true });
+      io.to(roomId).emit('choices_revealed', updatedRoom.playerChoices);
+      io.to(roomId).emit('update_room', updatedRoom);
+    } catch (error) {
+      console.error('Error revealing choices:', error);
+      socket.emit('error', { message: 'Failed to reveal choices' });
     }
   });
 
   // Move to next card
-  socket.on('next_card', (roomId) => {
-    if (rooms[roomId] && rooms[roomId].host === socket.id) {
-      const currentIndex = rooms[roomId].currentCardIndex;
+  socket.on('next_card', async (roomId) => {
+    try {
+      const updatedRoom = await roomManager.nextCard(roomId, socket.id);
       
-      // Save current card choices to history before moving to next card
-      if (!rooms[roomId].cardHistory[currentIndex]) {
-        rooms[roomId].cardHistory[currentIndex] = {};
-      }
-      
-      // Copy current choices to history
-      Object.keys(rooms[roomId].playerChoices).forEach(playerId => {
-        if (rooms[roomId].playerChoices[playerId]) {
-          rooms[roomId].cardHistory[currentIndex][playerId] = rooms[roomId].playerChoices[playerId];
-        }
-      });
-      
-      // Save the current state after each card
-      const resultsPath = saveGameResults(roomId, false);
-      console.log(`Saved progress after card ${currentIndex}`);
-      
-      const nextIndex = currentIndex + 1;
-      
-      if (nextIndex < rooms[roomId].shuffledCards.length) {
-        rooms[roomId].currentCardIndex = nextIndex;
-        rooms[roomId].revealChoices = false;
-        
-        // Reset player choices for the new card
-        rooms[roomId].players.forEach(player => {
-          player.ready = false;
-          rooms[roomId].playerChoices[player.id] = null;
-        });
-        
-        io.to(roomId).emit('new_card', { 
-          card: rooms[roomId].shuffledCards[nextIndex], 
-          currentCardIndex: nextIndex 
-        });
-        
-        console.log(`Moved to card ${nextIndex} in room: ${roomId}`);
-      } else {
-        // Game is over, save final results to JSON with 'final' flag
-        const finalResultsPath = saveGameResults(roomId, true);
-        
+      if (updatedRoom.status === 'finished') {
         io.to(roomId).emit('game_over', { 
-          resultsPath: finalResultsPath,
-          downloadUrl: `/download/${roomId}/${path.basename(finalResultsPath)}`
+          resultsPath: `/download/${roomId}/final`
         });
-        console.log(`Game over in room: ${roomId}`);
+      } else {
+        io.to(roomId).emit('new_card', { 
+          card: updatedRoom.shuffledCards[updatedRoom.currentCardIndex], 
+          currentCardIndex: updatedRoom.currentCardIndex 
+        });
       }
+      
+      io.to(roomId).emit('update_room', updatedRoom);
+    } catch (error) {
+      console.error('Error moving to next card:', error);
+      socket.emit('error', { message: error.message || 'Failed to move to next card' });
     }
   });
 
   // Update card position after discussion
-  socket.on('update_choice', ({ roomId, choice }) => {
-    if (rooms[roomId] && rooms[roomId].revealChoices) {
-      rooms[roomId].playerChoices[socket.id] = choice;
+  socket.on('update_choice', async ({ roomId, choice }) => {
+    try {
+      const room = await roomManager.getRoom(roomId);
+      if (!room || !room.revealChoices) {
+        socket.emit('error', { message: 'Not in reveal phase' });
+        return;
+      }
+
+      const updatedRoom = await roomManager.submitChoice(roomId, socket.id, choice);
       io.to(roomId).emit('choice_updated', {
         playerId: socket.id,
         choice
       });
-      console.log(`Player ${socket.id} updated choice to: ${choice}`);
-    }
-  });
-
-  socket.on('get_room_data', (roomId) => {
-    console.log(`Room data requested for: ${roomId}`);
-    if (rooms[roomId]) {
-      socket.emit('update_room', rooms[roomId]);
-    } else {
-      socket.emit('error', { message: 'Room not found' });
-      console.log(`Room ${roomId} not found when requested`);
+      io.to(roomId).emit('update_room', updatedRoom);
+    } catch (error) {
+      console.error('Error updating choice:', error);
+      socket.emit('error', { message: 'Failed to update choice' });
     }
   });
 
   // Handle disconnection
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log(`User disconnected: ${socket.id}`);
     
-    // Remove player from all rooms they were in
-    for (const roomId in rooms) {
-      const room = rooms[roomId];
-      const playerIndex = room.players.findIndex(p => p.id === socket.id);
-      
-      if (playerIndex !== -1) {
-        const username = room.players[playerIndex].username;
-        room.players.splice(playerIndex, 1);
-        
-        if (room.playerChoices[socket.id]) {
-          delete room.playerChoices[socket.id];
-        }
-        
-        // If host leaves, assign a new host or close the room
-        if (room.host === socket.id) {
-          if (room.players.length > 0) {
-            room.host = room.players[0].id;
-            io.to(roomId).emit('new_host', { hostId: room.host });
+    if (currentRoomId) {
+      try {
+        const result = await roomManager.removePlayer(currentRoomId, socket.id);
+        if (result) {
+          const { room, removedPlayer } = result;
+          
+          if (room.players.length === 0) {
+            // Room is empty, clean it up
+            roomManager.rooms.delete(currentRoomId);
+            await redis.del(`room:${currentRoomId}`);
           } else {
-            delete rooms[roomId];
-            continue;
+            io.to(currentRoomId).emit('player_left', { username: removedPlayer.username });
+            io.to(currentRoomId).emit('update_room', room);
+            
+            if (room.host !== socket.id) {
+              io.to(currentRoomId).emit('new_host', { hostId: room.host });
+            }
           }
         }
-        
-        io.to(roomId).emit('player_left', { username });
-        io.to(roomId).emit('update_room', room);
+      } catch (error) {
+        console.error('Error handling disconnect:', error);
       }
     }
   });
 });
 
-// Generate a 6-character alphanumeric room ID
-function generateRoomId() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    activeRooms: roomManager.getActiveRooms().length
+  });
+});
 
+// Admin endpoints
 app.get('/admin', (req, res) => {
   const adminHtml = `
     <!DOCTYPE html>
     <html>
     <head>
-      <title>Rithm Project Admin</title>
+      <title>Game Admin Dashboard</title>
       <style>
         body { font-family: Arial, sans-serif; margin: 20px; }
         h1 { color: #333; }
+        .stats { display: flex; gap: 20px; margin-bottom: 20px; }
+        .stat-card { background: #f5f5f5; padding: 15px; border-radius: 5px; }
         table { width: 100%; border-collapse: collapse; }
         th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
         tr:hover { background-color: #f5f5f5; }
-        .button { 
-          display: inline-block; 
-          padding: 5px 10px; 
-          background: #4CAF50; 
-          color: white; 
-          text-decoration: none; 
-          margin-right: 5px;
-          border-radius: 3px;
-        }
       </style>
     </head>
     <body>
-      <h1>Rithm Project - Game Results</h1>
-      <table id="resultsTable">
+      <h1>Game Admin Dashboard</h1>
+      <div class="stats">
+        <div class="stat-card">
+          <h3>Active Rooms</h3>
+          <p id="activeRooms">Loading...</p>
+        </div>
+        <div class="stat-card">
+          <h3>Total Players</h3>
+          <p id="totalPlayers">Loading...</p>
+        </div>
+      </div>
+      <table id="roomsTable">
         <tr>
-          <th>Filename</th>
           <th>Room ID</th>
-          <th>Date</th>
           <th>Host</th>
           <th>Players</th>
-          <th>Actions</th>
+          <th>Status</th>
+          <th>Created</th>
         </tr>
         <tbody id="tableBody"></tbody>
       </table>
 
       <script>
-        fetch('/admin/results')
-          .then(response => response.json())
-          .then(data => {
-            const tableBody = document.getElementById('tableBody');
-            
-            data.forEach(game => {
-              const row = document.createElement('tr');
+        function updateStats() {
+          fetch('/admin/stats')
+            .then(response => response.json())
+            .then(data => {
+              document.getElementById('activeRooms').textContent = data.activeRooms;
+              document.getElementById('totalPlayers').textContent = data.totalPlayers;
               
-              row.innerHTML = \`
-                <td>\${game.filename}</td>
-                <td>\${game.data.roomId || 'N/A'}</td>
-                <td>\${new Date(game.data.timestamp).toLocaleString()}</td>
-                <td>\${game.data.host || 'Unknown'}</td>
-                <td>\${game.data.players.join(', ')}</td>
-                <td>
-                  <a href="/admin/view/\${game.filename}" class="button" target="_blank">View</a>
-                  <a href="/admin/download/\${game.filename}" class="button" download>Download</a>
-                </td>
-              \`;
+              const tableBody = document.getElementById('tableBody');
+              tableBody.innerHTML = '';
               
-              tableBody.appendChild(row);
-            });
-          })
-          .catch(error => {
-            console.error('Error fetching results:', error);
-          });
+              data.rooms.forEach(room => {
+                const row = document.createElement('tr');
+                row.innerHTML = \`
+                  <td>\${room.id}</td>
+                  <td>\${room.players.find(p => p.id === room.host)?.username || 'Unknown'}</td>
+                  <td>\${room.players.length}</td>
+                  <td>\${room.status}</td>
+                  <td>\${new Date(room.createdAt).toLocaleString()}</td>
+                \`;
+                tableBody.appendChild(row);
+              });
+            })
+            .catch(error => console.error('Error fetching stats:', error));
+        }
+        
+        updateStats();
+        setInterval(updateStats, 5000);
       </script>
     </body>
     </html>
@@ -413,88 +687,34 @@ app.get('/admin', (req, res) => {
   res.send(adminHtml);
 });
 
-const gameResultsDir = path.join(__dirname, 'game_results');
-if (!fs.existsSync(gameResultsDir)) {
-  try {
-    fs.mkdirSync(gameResultsDir, { recursive: true });
-    console.log(`Created game results directory at: ${gameResultsDir}`);
-  } catch (error) {
-    console.error(`Failed to create game results directory: ${error.message}`);
-  }
-}
-
-// API endpoint to get all game results
-app.get('/test-file', (req, res) => {
-  try {
-    const testDir = path.join(__dirname, 'game_results');
-    
-    if (!fs.existsSync(testDir)) {
-      fs.mkdirSync(testDir, { recursive: true });
-    }
-    
-    const testFile = path.join(testDir, 'test_file.json');
-    fs.writeFileSync(testFile, JSON.stringify({ test: 'successful', timestamp: new Date() }, null, 2));
-    
-    res.send(`Test file created at: ${testFile}`);
-  } catch (error) {
-    res.status(500).send(`Error creating test file: ${error.message}`);
-  }
-});
-
-app.get('/list-files', (req, res) => {
-  try {
-    const files = fs.readdirSync(__dirname);
-    const gameResultsPath = path.join(__dirname, 'game_results');
-    let gameResultsFiles = [];
-    
-    if (fs.existsSync(gameResultsPath)) {
-      gameResultsFiles = fs.readdirSync(gameResultsPath);
-    }
-    
-    res.json({ 
-      currentDirectory: __dirname,
-      files,
-      gameResultsDirectory: gameResultsPath,
-      hasGameResultsDir: fs.existsSync(gameResultsPath),
-      gameResultsFiles
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Add a simple admin endpoint to view saved games
-app.get('/saved-games', (req, res) => {
-  try {
-    const resultsDir = path.join(__dirname, 'game_results');
-    
-    if (!fs.existsSync(resultsDir)) {
-      return res.json({ message: 'No game results directory found', files: [] });
-    }
-    
-    const files = fs.readdirSync(resultsDir)
-      .filter(file => file.endsWith('.json'))
-      .map(file => {
-        const stats = fs.statSync(path.join(resultsDir, file));
-        return {
-          filename: file,
-          size: stats.size,
-          created: stats.birthtime
-        };
-      })
-      .sort((a, b) => b.created - a.created);
-    
-    res.json({
-      message: `Found ${files.length} game result files`,
-      directory: resultsDir,
-      files
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+app.get('/admin/stats', (req, res) => {
+  const activeRooms = roomManager.getActiveRooms();
+  const totalPlayers = activeRooms.reduce((sum, room) => sum + room.players.length, 0);
+  
+  res.json({
+    activeRooms: activeRooms.length,
+    totalPlayers,
+    rooms: activeRooms.map(room => ({
+      id: room.id,
+      host: room.host,
+      players: room.players,
+      status: room.status,
+      createdAt: room.createdAt
+    }))
+  });
 });
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Admin dashboard available at http://localhost:${PORT}/admin`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
 });
