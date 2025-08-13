@@ -19,14 +19,21 @@ function GameRoom({ socket, roomData, setRoomData }) {
   const [error, setError] = useState(null);
   const [isLateJoiner, setIsLateJoiner] = useState(false);
   const [showLateJoinerMessage, setShowLateJoinerMessage] = useState(false);
+  const [showReconnectionMessage, setShowReconnectionMessage] = useState(false);
   
   console.log("Initial roomData:", roomData);
   console.log("Initial room state:", room);
   
   useEffect(() => {
-    // Request room data from server
-    console.log('Requesting room data for:', roomId);
-    socket.emit('get_room_data', roomId);
+    // Try to reconnect first if we have a player ID
+    if (roomData?.playerId) {
+      console.log('Attempting reconnection with player ID:', roomData.playerId);
+      socket.emit('reconnect_player', { roomId, playerId: roomData.playerId });
+    } else {
+      // Request room data from server
+      console.log('Requesting room data for:', roomId);
+      socket.emit('get_room_data', roomId);
+    }
 
     // Set up socket event listeners
     const handleRoomUpdate = (updatedRoom) => {
@@ -127,6 +134,26 @@ function GameRoom({ socket, roomData, setRoomData }) {
       }
     };
 
+    const handleReconnectionSuccess = (data) => {
+      console.log('Reconnection successful:', data);
+      setRoom(data.room);
+      setRoomData({
+        ...roomData,
+        isHost: data.isHost
+      });
+      setIsLoading(false);
+      
+      // Show reconnection success message
+      setShowReconnectionMessage(true);
+      setTimeout(() => setShowReconnectionMessage(false), 3000);
+    };
+
+    const handlePlayerReconnected = (data) => {
+      console.log('Player reconnected:', data);
+      // Update room data to reflect the reconnection
+      socket.emit('get_room_data', roomId);
+    };
+
     // Add event listeners
     socket.on('update_room', handleRoomUpdate);
     socket.on('game_started', handleGameStarted);
@@ -139,6 +166,8 @@ function GameRoom({ socket, roomData, setRoomData }) {
     socket.on('choice_updated', handleChoiceUpdated);
     socket.on('error', handleError);
     socket.on('room_joined', handleRoomJoined);
+    socket.on('reconnection_success', handleReconnectionSuccess);
+    socket.on('player_reconnected', handlePlayerReconnected);
     
     // Cleanup function
     return () => {
@@ -153,6 +182,8 @@ function GameRoom({ socket, roomData, setRoomData }) {
       socket.off('choice_updated', handleChoiceUpdated);
       socket.off('error', handleError);
       socket.off('room_joined', handleRoomJoined);
+      socket.off('reconnection_success', handleReconnectionSuccess);
+      socket.off('player_reconnected', handlePlayerReconnected);
     };
   }, [socket, roomData, setRoomData, roomId]);
   
@@ -263,6 +294,12 @@ function GameRoom({ socket, roomData, setRoomData }) {
         {showLateJoinerMessage && (
           <div className="late-joiner-message">
             <p>Welcome! You've joined a game in progress. You can participate in the current card discussion.</p>
+          </div>
+        )}
+        
+        {showReconnectionMessage && (
+          <div className="reconnection-message">
+            <p>Successfully reconnected to the game!</p>
           </div>
         )}
         
