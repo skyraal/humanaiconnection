@@ -1,6 +1,7 @@
 # Human Connection Card Game
 
 A real-time multiplayer card game that explores human connection in the age of AI. Players discuss and vote on various scenarios involving AI and human interaction.
+Hosted on https://humanaiconnectiongame.onrender.com
 
 ## Recent Improvements (v2.0)
 
